@@ -1,9 +1,9 @@
 -- Create the metadata table
 CREATE TABLE metadata (
     file_uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    path VARCHAR(255),
+    path VARCHAR(4084),
     date DATE,
-    file_name VARCHAR(255),
+    file_name VARCHAR(2048),
     height INT,
     width INT
 );

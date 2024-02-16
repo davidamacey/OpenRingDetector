@@ -6,9 +6,9 @@ from ntfy import cleaner_ntfy
 from database_sql import insert_metadata_bulk, insert_detections_bulk, get_ref_vector_by_name
 from utils import find_vectors_above_threshold
 
-from load_models import *
+from load_models import reg_model, emb_model
 
-from database_vec import detections_collection
+from database_vec import create_new_collection
 
 if __name__ == '__main__': 
 
@@ -42,6 +42,10 @@ if __name__ == '__main__':
         # save crops to file for easy comparison check
         # for index, crop in enumerate(img_crops):
         #     imwrite(f'crop_{index}.jpg', crop)
+        
+        # create reference Collection
+        new_collection = "detections"
+        detections_collection = create_new_collection(new_collection)
         
         print('Inserting crop data to Milvus')
         # write the embeddings to milvus

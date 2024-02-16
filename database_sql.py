@@ -1,15 +1,20 @@
-from os import getenv
+from dotenv import dotenv_values
 from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.orm import sessionmaker
 from database_sql_model import Metadata, Detection, Reference, Base
 from uuid import uuid4
 
-DB_NAME = getenv("DB_NAME")
-DB_USER = getenv("DB_USER")
-DB_PASSWORD = getenv("DB_PASSWORD")
+config = dotenv_values(".env")
+
+DB_NAME = config["DB_NAME"]
+DB_USER = config["DB_USER"]
+DB_PASSWORD = config["DB_PASSWORD"]
 
 # Create the SQLAlchemy engine
-engine = create_engine(f'postgresql://{DB_USER}:{DB_PASSWORD}@172.21.0.4/{DB_NAME}')
+print('Connecting to database')
+load_string = f'postgresql://{DB_USER}:{DB_PASSWORD}@172.18.0.6/{DB_NAME}'
+engine = create_engine(load_string)
+print('Connected to database successfully')
 
 # Create a session to interact with the database
 Session = sessionmaker(bind=engine)
@@ -261,3 +266,46 @@ def get_ref_vector_by_name(text_name):
     if reference:
         return reference.ref_vector
     return None
+
+def get_all_image_paths():
+    """
+    Queries the database for all image paths stored in the Metadata table.
+
+    Returns:
+        list: A list of all image paths as strings.
+    """
+
+    try:
+        # Query the Metadata table for all paths and unpack the results into a list
+        paths = session.query(Metadata.path).all()
+        return [path[0] for path in paths]
+    finally:
+        # Ensure that the session is closed after the operation
+        session.close()
+        
+def remove_existing_image_paths(existing_paths):
+    """
+    Filters out image paths that are already present in the database by performing a set difference.
+
+    Args:
+        existing_paths (list): A list of image paths that need to be checked against the database.
+
+    Returns:
+        list: A list of image paths that are not in the database.
+    """
+
+    try:
+        # Query all paths from the database and create a set for faster difference operation
+        paths_in_db = set(path[0] for path in session.query(Metadata.path).all())
+
+        # Create a set from the existing paths for a faster difference operation
+        existing_paths_set = set(existing_paths)
+
+        # Perform a set difference to get paths not in the database
+        paths_to_process = list(existing_paths_set - paths_in_db)
+        
+        return paths_to_process
+    
+    finally:
+        # Ensure that the session is closed after the operation
+        session.close()

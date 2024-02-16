@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime
 from uuid import uuid4
 from torch import no_grad, cuda, nn
+import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torchvision.transforms.functional import pad
 from torch.utils.data import DataLoader, Dataset
@@ -95,6 +96,7 @@ def preprocess_image_single(input_image, im_size=640):
     elif isinstance(input_image, np.ndarray):
         # Use the provided OpenCV image if input is already opened
         opencv_img = input_image
+        # imwrite("opencv_org_image.jpg", opencv_img)
     else:
         raise ValueError("Input must be a file path (str) or an already opened OpenCV image (numpy.ndarray).")
 
@@ -116,13 +118,17 @@ def preprocess_image_single(input_image, im_size=640):
     
     # Create a blank canvas of the desired size and paste the resized image onto it
     padded_img = zeros(3, im_size, im_size, dtype=float32)
-    start_h = (im_size - new_height) // 2
-    start_w = (im_size - new_width) // 2
-    padded_img[:, start_h:start_h+new_height, start_w:start_w+new_width] = tensor(opencv_img, dtype=float32).permute(2, 0, 1) / 255.0
+    padded_img[:, :new_height, :new_width] = tensor(opencv_img, dtype=float32).permute(2, 0, 1) / 255.0
     
-    return padded_img
+    # testing only
+    # arrImg = (padded_img.numpy() * 255).astype(np.uint8).transpose(1, 2, 0)  # Conversion back to [0, 255] range
+    # # cvImg = cvtColor(arrImg, COLOR_RGB2BGR)
+    # imwrite("opencv_padded_image.jpg", arrImg)
+    
+    return padded_img    
+    
 
-def load_and_preprocess_images(input_paths, im_size=640, device='cuda:0'):
+def load_and_preprocess_images(input_paths, im_size=640, device='cuda:1'):
     """
     Load and preprocess images from a list of image paths or a directory path using parallel processing,
     and return a batch tensor in BCHW format with padding to the right and bottom.
@@ -169,37 +175,73 @@ def load_and_preprocess_images(input_paths, im_size=640, device='cuda:0'):
 
     return batch_tensor, image_paths
 
-def process_tensor_and_calculate_mean(model, input_tensor):
+def model_embedding_norm(model, input_tensor, device_loc = 'cuda:0'):
     """
-    Process an input tensor through a model with the head removed, reshape the output,
-    and calculate the mean along the last dimension of the reshaped tensor for each sample in the batch.
+    Process an input tensor through a PyTorch model with the final layer (head) removed,
+    then calculate the normalized mean of the output tensor's last dimension.
 
-    Args:
+    Parameters:
         model (nn.Module): The PyTorch model with the head removed.
-        input_tensor (Tensor): Input tensor to be processed.
+        input_tensor (torch.Tensor): A 4D input tensor (batch_size, channels, height, width).
 
     Returns:
-        Tensor: A tensor containing the mean values along the last dimension for each sample in the batch.
+        torch.Tensor: A normalized tensor of mean values along the last dimension
+                      for each sample in the batch.
+
+    Raises:
+        ValueError: If the input tensor does not have 4 dimensions.
     """
-    # Ensure the input tensor has the correct shape (BCHW)
-    if len(input_tensor.shape) != 4:
-        raise ValueError("Input tensor should have shape (batch_size, channels, height, width).")
-
-    # Run the input tensor through the model with the head removed
-    results = model.model(input_tensor)
+    # Validate input tensor dimensions
+    # if input_tensor.ndim != 4:
+    #     raise ValueError("Input tensor should be 4D with shape (batch_size, channels, height, width).")
     
-    # Reshape the tensor to separate the 576 matrices
+    if isinstance(input_tensor[0], np.ndarray):
+        # Convert numpy arrays to PyTorch tensors        
+        # if values greater than 1 than normal
+        if any(np.max(arr) > 1 for arr in input_tensor):            
+            input_tensor = [tensor(arr / 255, dtype=float32) for arr in input_tensor]
+        else:
+            input_tensor = [tensor(arr, dtype=float32) for arr in input_tensor]
+        
+    # stack the images, and permute to B,C,H,W
+    batch_tensor = stack(input_tensor, dim=0).to(device_loc)
+    batch_tensor = batch_tensor.permute(0, 3, 1, 2)
+    
+    # Process the tensor through the model
+    results = model.model(batch_tensor)
+
+    # Reshape the tensor to a 3D tensor where the last dimension is flattened
     batch_size, num_matrices, _, _ = results.shape
-    reshaped_tensor = results.view(batch_size, num_matrices, -1)  # Reshape to [batch_size, 576, 400]
-    
-    # Calculate the mean along the last dimension (the 20x20 matrices) for each sample in the batch
-    mean_values = mean(reshaped_tensor, dim=2)
-    
-    # Normalize each vector by dividing it by its L2 norm (Euclidean norm)
-    normed_mean_values = mean_values / norm(mean_values, p=2, dim=1, keepdim=True)
-    
-    return normed_mean_values
+    reshaped_tensor = results.view(batch_size, num_matrices, -1)
 
+    # Calculate the mean along the last dimension
+    # for getting mean of the last dimension
+    mean_values = reshaped_tensor.mean(dim=2)
+
+    # Normalize each vector by dividing it by its L2 norm
+    normed_mean_values = F.normalize(mean_values, p=2, dim=1)
+
+    return normed_mean_values.tolist()
+
+def face_embedding_norm(model, input_face_crops):
+    """Run face_embedding model and normalize the output vectors
+
+    Args:
+        model (resnet model): Resnet face model
+        input_tensor (tensor): Stacked tensors of cropped faces
+
+    Returns:
+        list: list of vectors representing faces
+    """
+    
+    # using built in crops from facenet
+    batch_tensor = stack(input_face_crops, dim=0)
+    
+    embeddings = model(batch_tensor)
+    # convert to list and normalize vectors
+    vector_list = F.normalize(embeddings, p=2, dim=1) 
+    
+    return vector_list.tolist()
 
 ## RESNET Items
 class CustomDataset(Dataset):
@@ -326,7 +368,6 @@ def process_tensor_RESNET(model, dataloader_input):
 
     return normed_mean_values
 
-@timer_func
 def get_embeddings(image_paths, emb_model, im_size=640, device='cuda:0', if_refence = False, batch_size = 32):
     """
     Load and preprocess a batch of images, then calculate feature embeddings for the batch using a model.
@@ -351,12 +392,14 @@ def get_embeddings(image_paths, emb_model, im_size=640, device='cuda:0', if_refe
         batch_feature_embeddings = process_tensor_RESNET(emb_model, dataloader)
     else:
         # Calculate feature embeddings for the batch
-        batch_feature_embeddings = process_tensor_and_calculate_mean(emb_model, batch_tensor)
+        batch_feature_embeddings = model_embedding_norm(emb_model, batch_tensor)
     
+    # if reference image only
     if if_refence:
         ref_mean_vec = mean(batch_feature_embeddings, 0).tolist()
         return image_paths, batch_feature_embeddings.tolist(), ref_mean_vec
     
+    # if images in is an np array then only return the embeddings
     if isinstance(image_paths[0], np.ndarray):
         return batch_feature_embeddings.tolist()
     
@@ -428,3 +471,66 @@ def process_results_to_dataframe(results, model):
         sub_df_crops = pd.DataFrame()
     
     return df_meta, df, img_crops, sub_df_crops, img_crop_paths
+
+def results_to_dataframe_img_crops(results, image_paths, model):
+    """
+    Process detection results and create dataframes for metadata and bounding boxes.
+
+    Args:
+        results (list): List of detection results, typically from a model.
+        model: The detection model used for inference.
+
+    Returns:
+        pd.DataFrame: Dataframe containing metadata.
+        pd.DataFrame: Dataframe containing bounding box information.
+        list: List of Image crops from detections.
+    """
+    df_list = []
+    df_metadata = []
+    img_crops = []
+    index = 0
+
+    for m_index, result in enumerate(results):
+        file_uuid = uuid4().hex
+        m_df = pd.DataFrame({'file_uuid': file_uuid, 'date': datetime.now(), 'height': result.orig_shape[0], 'width': result.orig_shape[1]}, index=[m_index])
+        boxes = result.boxes
+        for box in boxes:
+            cls = int(box.cls[0])
+            class_name = model.names[cls]
+            conf = int(box.conf[0] * 100)
+            bx = box.xywhn.tolist()[0]
+            gen_uuid = uuid4().hex
+            df_item = pd.DataFrame({'uuid': gen_uuid, 'file_uuid': file_uuid, 'class_name': class_name, 'class_id': cls, 'confidence': conf, 'xcenter': bx[0], 'ycenter': bx[1], 'width': bx[2], 'height': bx[3]}, index=[index])
+            df_list.append(df_item)
+            
+            # crop img by the items found
+            temp_box = [int(x) for x in box.xyxy.tolist()[0]]
+            # Define xyxy coordinates
+            x1, y1, x2, y2 = temp_box  # Replace with your desired coordinates
+
+            # Ensure the coordinates are within the image bounds
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(result.orig_img.shape[1], x2)
+            y2 = min(result.orig_img.shape[0], y2)
+
+            # Crop the image using NumPy array slicing
+            cropped_image = result.orig_img[y1:y2, x1:x2]
+
+            img_crops.append(cropped_image)
+                
+            index += 1
+        df_metadata.append(m_df)
+
+    # Create dataframes
+    df_meta = pd.concat(df_metadata)
+    # add image paths
+    df_meta['path'] = image_paths
+    
+    
+    if len(df_list) > 0:
+        df = pd.concat(df_list)
+    else:
+        df = pd.DataFrame()
+    
+    return df_meta, df, img_crops
