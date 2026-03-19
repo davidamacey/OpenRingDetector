@@ -4,82 +4,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Ring Detector is a self-hosted AI replacement for Ring's paid detection features. It listens for motion events via Firebase push, downloads snapshots/videos to NAS, runs YOLOv8 detection + optional Gemma 3 scene captioning, matches vehicles against saved references, tracks arrivals/departures, and sends rich push notifications (with snapshot images) via ntfy.
+Self-hosted AI replacement for Ring's paid detection features. Listens for Ring motion events via Firebase push, runs YOLOv8 detection + optional Gemma 3 captioning on GPU, matches vehicles against saved references, tracks arrivals/departures, and sends push notifications (with snapshot images) via ntfy.
 
 ## Setup
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env  # edit with your credentials
-docker compose up -d   # PostgreSQL with pgvector
+cp .env.example .env
+docker compose up -d
 ```
 
 ## Commands
 
 ```bash
-ring-watch                          # Main event loop
-ring-embed /path/to/images          # Batch process images
-ring-ref ./photos --name cleaners_car --display-name "Cleaner"
-ring-visits --active                # View visit history
-ring-refs                           # List references
+ring-watch       # Main event loop (push → detect → match → track → notify)
+ring-embed DIR   # Batch process images
+ring-ref DIR --name cleaners_car --display-name "Cleaner"
+ring-visits      # View visit history (--active, --name, --limit)
+ring-refs        # List configured references
+ring-status      # Health check: DB, GPU, model, Ring token, Ollama, archive
 
-ruff check --fix . && ruff format . # Lint
-pytest -v                           # Test (8 tests)
+ruff check --fix . && ruff format .
+pytest -v
 ```
 
 ## Architecture
 
-### Event Flow
+1. `RingEventListener` (Firebase push) → event queue
+2. Dedup + cooldown (30s) → download snapshot → archive video to NAS
+3. YOLOv8 detects objects → crop vehicles (COCO class 2=car, 7=truck)
+4. Optional: Gemma 3 4B caption via Ollama
+5. Crops → 576-dim embeddings → `match_against_references()` (pgvector cosine)
+6. Match → `record_arrival()` + `notify_arrival()` with snapshot
+7. Subsequent motion → `extend_visit()` (resets departure timer)
+8. No motion for `DEPARTURE_TIMEOUT` → `record_departure()` + "Time to pay!"
 
-1. `RingEventListener` (Firebase push) delivers motion events in seconds
-2. Cooldown check (30s default per camera) + event ID deduplication
-3. Downloads snapshot + archives video to NAS by date
-4. YOLOv8 detects objects → crops vehicles (car=2, truck=7)
-5. (Optional) Gemma 3 4B via Ollama generates scene caption
-6. Crops → 576-dim embeddings → `match_against_references()` via pgvector
-7. **Match** → `record_arrival()` + notify with snapshot attachment
-8. Subsequent motion extends visit timer
-9. **Departure** (no motion for `DEPARTURE_TIMEOUT`) → notify "Time to pay!"
+### Package (`ring_detector/`)
 
-### Watcher Tasks (`watcher.py`)
-
-- `_process_events()` — handles push events from Firebase queue
-- `_check_departures()` — every 60s, checks visit timeouts
-- `_refresh_ring_session()` — hourly token refresh
-
-### Package Layout
-
-| Module | Purpose |
-|--------|---------|
+| Module | Role |
+|--------|------|
 | `config.py` | All settings from `.env` |
-| `ring_api.py` | Ring auth + Firebase push listener + async download |
-| `models.py` | Loads YOLOv8, MTCNN, InceptionResnetV1 onto GPU |
+| `ring_api.py` | Ring auth + Firebase push + async download |
+| `models.py` | YOLOv8, MTCNN, InceptionResnetV1 on GPU |
 | `detector.py` | Detection + embedding pipeline |
-| `captioner.py` | Scene captioning via Ollama (Gemma 3 4B) |
-| `image_utils.py` | Image I/O, resize, pad, batch preparation |
-| `database.py` | SQLAlchemy 2.0 + pgvector — all data + vectors + visits |
+| `captioner.py` | Gemma 3 4B via Ollama (optional) |
+| `image_utils.py` | I/O, resize, pad, batch prep |
+| `database.py` | SQLAlchemy 2.0 + pgvector — all tables |
 | `notifications.py` | ntfy with snapshot attachments |
-| `watcher.py` | Async event loop: detect → match → track → notify |
-| `cli.py` | CLI: ring-embed, ring-ref, ring-visits, ring-refs |
+| `watcher.py` | Main async event loop |
+| `cli.py` | All CLI commands |
 
-### Database Tables
+### Database (PostgreSQL + pgvector)
 
-- **metadata** — image file info
-- **detections** — YOLO bounding boxes
-- **embeddings** — 576-dim YOLO backbone vectors (pgvector)
-- **face_embeddings** — 512-dim face vectors
-- **references** — named reference vectors (cleaners_car, yard_guy)
-- **visit_events** — arrival/departure tracking with timestamps
+`metadata`, `detections`, `embeddings` (576-dim), `face_embeddings` (512-dim), `references`, `visit_events`
 
-### Key Conventions
+### Key Constraints
 
-- Firebase push events — NOT polling
-- `ring-doorbell` >= 0.9 fully async
-- torch `>=2.2,<2.3` (facenet-pytorch compat)
-- Config via env vars only (`.env.example`)
-- Docker: `pgvector/pgvector:pg16` for all data + vectors
-- Captioner: Gemma 3 4B via Ollama (optional, ~2.6 GB VRAM)
-- Notifications include snapshot images via ntfy PUT
-- Motion cooldown per camera (MOTION_COOLDOWN, default 30s)
-- Event ID deduplication prevents double-processing
+- `torch>=2.2,<2.3` — facenet-pytorch compat
+- Docker: `pgvector/pgvector:pg16` — single container
+- Captioner: disabled by default (`CAPTIONER_ENABLED=false`)
+- Firebase push — not polling
