@@ -11,7 +11,17 @@ from uuid import uuid4
 
 import numpy as np
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String, create_engine, text
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    create_engine,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
 from ring_detector.config import settings
@@ -94,6 +104,21 @@ class Reference(Base):
     display_name = Column(String)  # e.g. "Cleaner's Car"
     category = Column(String, default="vehicle")  # "vehicle", "person", "other"
     vector = Column(Vector(YOLO_EMBED_DIM))
+
+
+class VisitEvent(Base):
+    """Tracks arrival/departure of known references (cleaner, yard guy, etc.)."""
+
+    __tablename__ = "visit_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    reference_name = Column(String)  # FK-ish to references.name
+    display_name = Column(String)
+    camera_name = Column(String)
+    arrived_at = Column(DateTime)
+    departed_at = Column(DateTime, nullable=True)
+    snapshot_path = Column(String, nullable=True)
+    notified_departure = Column(Integer, default=0)  # 0=no, 1=yes
 
 
 # --- Engine / Session Management ---
@@ -290,3 +315,58 @@ def get_new_paths(session: Session, candidate_paths: list[str]) -> list[str]:
     """Return paths not already in the database."""
     existing = set(p[0] for p in session.query(Metadata.path).all())
     return [p for p in candidate_paths if p not in existing]
+
+
+# --- Visit Event Tracking ---
+
+
+def record_arrival(
+    session: Session,
+    reference_name: str,
+    display_name: str,
+    camera_name: str,
+    snapshot_path: str | None = None,
+) -> VisitEvent:
+    """Record that a known reference arrived. Returns the visit event."""
+    from datetime import datetime
+
+    visit = VisitEvent(
+        reference_name=reference_name,
+        display_name=display_name,
+        camera_name=camera_name,
+        arrived_at=datetime.now(),
+        snapshot_path=snapshot_path,
+    )
+    session.add(visit)
+    session.commit()
+    log.info("Visit recorded: %s arrived at %s", display_name, camera_name)
+    return visit
+
+
+def record_departure(session: Session, visit: VisitEvent) -> int:
+    """Mark a visit as departed. Returns visit duration in minutes."""
+    from datetime import datetime
+
+    visit.departed_at = datetime.now()
+    visit.notified_departure = 1
+    session.commit()
+    duration = int((visit.departed_at - visit.arrived_at).total_seconds() / 60)
+    log.info("%s departed after %d min", visit.display_name, duration)
+    return duration
+
+
+def get_active_visits(session: Session) -> list[VisitEvent]:
+    """Get all visits that haven't departed yet."""
+    return session.query(VisitEvent).filter(VisitEvent.departed_at.is_(None)).all()
+
+
+def get_active_visit_by_reference(session: Session, reference_name: str) -> VisitEvent | None:
+    """Get active (not departed) visit for a specific reference."""
+    return (
+        session.query(VisitEvent)
+        .filter(
+            VisitEvent.reference_name == reference_name,
+            VisitEvent.departed_at.is_(None),
+        )
+        .first()
+    )

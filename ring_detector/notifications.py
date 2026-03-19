@@ -29,7 +29,7 @@ def send_notification(
             },
             timeout=10,
         )
-        log.info("Notification sent: %s", title)
+        log.info("Notification sent: %s — %s", title, message)
     except requests.RequestException:
         log.exception("Failed to send notification")
 
@@ -42,20 +42,22 @@ def notify_motion(camera_name: str, timestamp: str) -> None:
     )
 
 
-def notify_person_detected(person_name: str, camera_name: str) -> None:
+def notify_arrival(display_name: str, camera_name: str) -> None:
+    """Someone known has arrived."""
     send_notification(
-        message=f"{person_name} detected at {camera_name}",
-        title=f"{person_name} Arrived",
-        tags="person,camera",
+        message=f"{display_name} arrived at {camera_name}",
+        title=f"{display_name} — Arrived",
+        tags="white_check_mark,car",
         priority="high",
     )
 
 
-def notify_vehicle_detected(vehicle_label: str, camera_name: str) -> None:
+def notify_departure(display_name: str, camera_name: str, duration_mins: int) -> None:
+    """Someone known has left — time to pay!"""
     send_notification(
-        message=f"{vehicle_label} detected at {camera_name}",
-        title=f"{vehicle_label} Arrived",
-        tags="car,camera",
+        message=(f"{display_name} left {camera_name} after ~{duration_mins} min. Time to pay!"),
+        title=f"{display_name} — Done! Pay Now",
+        tags="money_with_wings,wave",
         priority="high",
     )
 

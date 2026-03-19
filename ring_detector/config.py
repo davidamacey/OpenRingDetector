@@ -25,16 +25,14 @@ class DatabaseConfig:
 
 
 @dataclass
-class MilvusConfig:
-    host: str = os.getenv("MILVUS_HOST", "localhost")
-    port: str = os.getenv("MILVUS_PORT", "19530")
-
-
-@dataclass
 class RingConfig:
     token_path: Path = Path(os.getenv("RING_TOKEN_PATH", "./tokens/token.cache"))
-    poll_interval_seconds: int = int(os.getenv("RING_POLL_INTERVAL", "60"))
+    fcm_credentials_path: Path = Path(
+        os.getenv("RING_FCM_CREDENTIALS_PATH", "./tokens/fcm_credentials.json")
+    )
     camera_name: str = os.getenv("RING_CAMERA_NAME", "")
+    # Seconds without new motion to consider someone "departed"
+    departure_timeout: int = int(os.getenv("DEPARTURE_TIMEOUT", "300"))
 
 
 @dataclass
@@ -70,7 +68,6 @@ class ModelConfig:
 @dataclass
 class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
-    milvus: MilvusConfig = field(default_factory=MilvusConfig)
     ring: RingConfig = field(default_factory=RingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)

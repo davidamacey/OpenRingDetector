@@ -2,33 +2,38 @@
 
 Custom AI-powered motion detection and notifications for Ring doorbell cameras — without paying for Ring Protect Plus AI features.
 
-Ring Detector polls your Ring cameras for motion events, downloads snapshots/videos, runs local object detection (YOLOv8) and optional face recognition, matches against your saved reference images (e.g., your cleaner's car, yard guy's truck), and sends push notifications to your phone via [ntfy](https://ntfy.sh).
+Ring Detector listens for motion events from your Ring cameras via Firebase push notifications, downloads snapshots, runs local YOLOv8 object detection on GPU, matches vehicles against your saved references (cleaner's car, yard guy's truck, etc.), tracks arrivals and departures, and sends push notifications to your phone via [ntfy](https://ntfy.sh).
 
 ## Features
 
 - **No Ring subscription needed** for AI features — runs entirely on your own hardware
-- **Custom vehicle recognition** — train on photos of specific vehicles (cleaner, yard guy, etc.)
+- **Near-instant alerts** — Firebase push events, not polling (sub-second delivery)
+- **Custom vehicle recognition** — train on photos of specific vehicles
+- **Arrival + departure tracking** — "Cleaner arrived!" then "Cleaner left after ~45 min. Time to pay!"
+- **Visit logging** — all visits stored in PostgreSQL with timestamps
 - **Face recognition** (optional) — identify known people via MTCNN + InceptionResnetV1
-- **Push notifications** via ntfy — works on any phone with the ntfy app
-- **Automatic archiving** — videos and snapshots saved to NAS with date-organized folders
-- **Vector similarity search** — powered by Milvus for fast embedding lookups
-- **GPU accelerated** — YOLOv8 detection runs on NVIDIA GPU
+- **Push notifications** via ntfy — works on any phone
+- **Automatic archiving** — videos and snapshots saved to NAS by date
+- **Vector similarity search** — pgvector in PostgreSQL (no separate vector DB)
+- **GPU accelerated** — YOLOv8 detection on NVIDIA GPU
 
 ## Architecture
 
 ```
-Ring Camera → [poll for motion events]
+Ring Camera
+    ↓ Firebase push (motion event)
+Download snapshot + archive video to NAS
     ↓
-Download snapshot/video → Archive to /mnt/nas/ring_archive/
+YOLOv8 Detection → Identify objects (cars, trucks, people)
     ↓
-YOLOv8 Detection → Identify objects (cars, trucks, people, etc.)
+Crop vehicles → Compute embeddings (576-dim, YOLOv8 backbone)
     ↓
-Crop detections → Compute embeddings (YOLOv8 backbone, 576-dim)
+Compare against references → pgvector cosine similarity
     ↓
-Compare against saved references → Milvus similarity search
-    ↓
-Match found? → ntfy push notification ("Cleaner arrived!")
-No match?   → ntfy notification ("Unknown visitor at Front Door")
+Match found?
+  YES → Record arrival, notify "Cleaner arrived!"
+        Track visit, on departure → "Time to pay!"
+  NO  → "Unknown visitor" or "Motion detected: car, person"
 ```
 
 ## Quick Start
@@ -37,8 +42,8 @@ No match?   → ntfy notification ("Unknown visitor at Front Door")
 
 - Python 3.12+
 - NVIDIA GPU with CUDA support
-- Docker (for PostgreSQL + Milvus)
-- A Ring doorbell camera with a cached auth token
+- Docker (for PostgreSQL with pgvector)
+- A Ring doorbell camera
 
 ### Installation
 
@@ -46,14 +51,10 @@ No match?   → ntfy notification ("Unknown visitor at Front Door")
 git clone https://github.com/davidamacey/ring-detector.git
 cd ring-detector
 
-# Create virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install
 pip install -e ".[dev]"
 
-# Copy and edit config
 cp .env.example .env
 # Edit .env with your database passwords, camera name, ntfy URL, etc.
 ```
@@ -64,7 +65,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This starts PostgreSQL, Milvus (with etcd + MinIO), and pgAdmin.
+This starts PostgreSQL (with pgvector) and pgAdmin.
 
 ### Ring Authentication
 
@@ -73,14 +74,19 @@ This starts PostgreSQL, Milvus (with etcd + MinIO), and pgAdmin.
 python -m ring_doorbell.cli --auth
 
 # Token is saved to ./tokens/token.cache
+# FCM credentials auto-generated on first run of ring-watch
 ```
 
-### Create a Reference (e.g., Cleaner's Car)
+### Create References
 
-Take 10-20 photos of the vehicle you want to recognize and put them in a directory:
+Take 10-20 photos of each vehicle you want to recognize:
 
 ```bash
-ring-ref ./photos/cleaners_car --name "Cleaner's Car"
+# Cleaner's vehicle
+ring-ref ./photos/cleaners_car --name cleaners_car --display-name "Cleaner"
+
+# Yard guy's truck
+ring-ref ./photos/yard_guy --name yard_guy --display-name "Yard Guy"
 ```
 
 ### Start Watching
@@ -89,7 +95,7 @@ ring-ref ./photos/cleaners_car --name "Cleaner's Car"
 ring-watch
 ```
 
-This polls your Ring camera every 60 seconds (configurable) for motion events, runs detection, and sends notifications.
+This connects to Ring via Firebase push events (near-instant), runs detection on every motion event, and tracks arrivals/departures.
 
 ### Batch Process Existing Images
 
@@ -97,23 +103,31 @@ This polls your Ring camera every 60 seconds (configurable) for motion events, r
 ring-embed /path/to/images --batch-size 50
 ```
 
-## Configuration
+## How It Works
 
-All config is via environment variables (or `.env` file):
+1. **Push Event**: Ring camera detects motion → Firebase delivers event in seconds
+2. **Snapshot**: Downloads camera snapshot + archives video to NAS
+3. **Detection**: YOLOv8 identifies objects (cars, trucks, people, etc.)
+4. **Embedding**: Vehicle crops → 576-dim feature vectors via YOLOv8 backbone
+5. **Matching**: Vectors compared against references via pgvector cosine similarity
+6. **Arrival**: Match found → record visit, send "Cleaner arrived!" notification
+7. **Tracking**: Subsequent motion extends the visit timer
+8. **Departure**: No motion for 5 min (configurable) → "Cleaner left after ~45 min. Time to pay!"
+
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RING_CAMERA_NAME` | | Name of your Ring camera |
-| `RING_POLL_INTERVAL` | `60` | Seconds between motion checks |
 | `RING_TOKEN_PATH` | `./tokens/token.cache` | Path to Ring auth token |
+| `RING_FCM_CREDENTIALS_PATH` | `./tokens/fcm_credentials.json` | FCM push credentials |
+| `DEPARTURE_TIMEOUT` | `300` | Seconds without motion before departure |
 | `ARCHIVE_DIR` | `/mnt/nas/ring_archive` | Where to save videos/snapshots |
 | `NTFY_URL` | | Your ntfy topic URL |
 | `TORCH_DEVICE` | `cuda:0` | GPU device for inference |
 | `YOLO_MODEL_PATH` | `./models/yolov8m.pt` | Path to YOLO weights |
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5433` | PostgreSQL port |
-| `MILVUS_HOST` | `localhost` | Milvus host |
-| `MILVUS_PORT` | `19530` | Milvus port |
 
 ## Project Structure
 
@@ -121,48 +135,33 @@ All config is via environment variables (or `.env` file):
 ring_detector/
 ├── __init__.py          # Package version
 ├── config.py            # Settings from environment
-├── ring_api.py          # Async Ring API (auth, download, events)
+├── ring_api.py          # Ring API + Firebase push event listener
 ├── models.py            # ML model loading (YOLO, MTCNN, ResNet)
 ├── detector.py          # Detection + embedding pipeline
 ├── image_utils.py       # Image I/O, resize, pad
-├── database.py          # PostgreSQL (SQLAlchemy 2.0)
-├── vector_db.py         # Milvus vector operations
-├── notifications.py     # ntfy push notifications
-├── watcher.py           # Main event loop (poll → detect → notify)
-└── cli.py               # CLI entry points
+├── database.py          # PostgreSQL + pgvector (all data + vectors)
+├── notifications.py     # ntfy push notifications (arrival, departure, etc.)
+├── watcher.py           # Main event loop (push events → detect → track → notify)
+└── cli.py               # CLI entry points (ring-embed, ring-ref)
 ```
 
 ## Docker Services
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| PostgreSQL | 5433 | Metadata and detection storage |
-| Milvus | 19530 | Vector similarity search |
-| MinIO | 9054/9055 | Milvus object storage backend |
+| PostgreSQL + pgvector | 5433 | All data: metadata, detections, embeddings, visits |
 | pgAdmin | 6060 | Database admin UI |
 
 ## Development
 
 ```bash
-# Install with dev dependencies
 pip install -e ".[dev]"
 
-# Lint and format
 ruff check --fix .
 ruff format .
 
-# Run tests
 pytest -v
 ```
-
-## How It Works
-
-1. **Polling**: `ring-watch` checks your Ring camera for new motion events
-2. **Download**: When motion is detected, downloads a snapshot (and optionally video)
-3. **Detection**: YOLOv8 identifies objects in the image (cars, trucks, people, etc.)
-4. **Embedding**: Detected objects are cropped and run through the YOLOv8 backbone to produce 576-dimensional feature vectors
-5. **Matching**: Vectors are compared against your saved references using cosine similarity
-6. **Notification**: If a match is found (e.g., cleaner's car), sends a targeted push notification
 
 ## License
 
