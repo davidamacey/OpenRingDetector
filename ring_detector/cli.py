@@ -1,19 +1,24 @@
-"""CLI entry points for batch processing and reference management."""
+"""CLI entry points for batch processing, reference management, and visit history."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime
 from math import ceil
+from uuid import uuid4
 
 import numpy as np
 from tqdm import tqdm
 
 from ring_detector.database import (
+    VisitEvent,
     create_tables,
     find_similar_embeddings,
+    get_all_references,
     get_session,
     insert_embeddings_bulk,
+    insert_metadata_bulk,
     upsert_reference,
 )
 from ring_detector.detector import (
@@ -77,7 +82,7 @@ def ref_main():
         "--name", type=str, required=True, help="Reference name (e.g. cleaners_car)"
     )
     parser.add_argument(
-        "--display-name", type=str, default=None, help="Display name (e.g. Cleaner's Car)"
+        "--display-name", type=str, default=None, help="Display name (e.g. Cleaner)"
     )
     parser.add_argument(
         "--category",
@@ -101,32 +106,21 @@ def ref_main():
     paths, resized, padded = prepare_batch(image_files)
     embeddings = compute_yolo_embeddings(models, padded)
 
-    # Compute mean reference vector
     mean_vec = np.mean(embeddings, axis=0).tolist()
-
-    # Store mean reference vector in PostgreSQL (pgvector)
     upsert_reference(session, args.name, display_name, mean_vec, args.category)
 
-    # Also store individual embeddings for later search
-    from datetime import datetime
-    from uuid import uuid4
-
-    # Create metadata entries for reference images
-    meta_records = []
-    for p in paths:
-        meta_records.append(
-            {
-                "file_uuid": uuid4().hex,
-                "date": datetime.now(),
-                "path": p,
-                "file_name": p.split("/")[-1],
-                "height": 0,
-                "width": 0,
-            }
-        )
-
-    from ring_detector.database import insert_metadata_bulk
-
+    # Store individual embeddings
+    meta_records = [
+        {
+            "file_uuid": uuid4().hex,
+            "date": datetime.now(),
+            "path": p,
+            "file_name": p.split("/")[-1],
+            "height": 0,
+            "width": 0,
+        }
+        for p in paths
+    ]
     insert_metadata_bulk(session, meta_records)
     file_uuids = [m["file_uuid"] for m in meta_records]
     insert_embeddings_bulk(
@@ -135,10 +129,71 @@ def ref_main():
 
     log.info("Reference '%s' created with %d images", display_name, len(paths))
 
-    # Verify by finding closest match
     results = find_similar_embeddings(session, mean_vec, embed_type="reference", limit=1)
     if results:
         log.info("Closest reference image (distance=%.4f)", results[0]["distance"])
+
+
+def visits_main():
+    """View recent visit history."""
+    parser = argparse.ArgumentParser(description="View visit history")
+    parser.add_argument("--limit", type=int, default=20, help="Number of visits to show")
+    parser.add_argument(
+        "--active", action="store_true", help="Show only active (not departed) visits"
+    )
+    parser.add_argument("--name", type=str, default=None, help="Filter by reference name")
+    args = parser.parse_args()
+
+    create_tables()
+    session = get_session()
+
+    query = session.query(VisitEvent).order_by(VisitEvent.arrived_at.desc())
+
+    if args.active:
+        query = query.filter(VisitEvent.departed_at.is_(None))
+    if args.name:
+        query = query.filter(VisitEvent.reference_name == args.name)
+
+    visits = query.limit(args.limit).all()
+
+    if not visits:
+        print("No visits found.")
+        return
+
+    print(f"\n{'Name':<20} {'Camera':<15} {'Arrived':<20} {'Departed':<20} {'Duration'}")
+    print("-" * 95)
+
+    for v in visits:
+        arrived = v.arrived_at.strftime("%Y-%m-%d %H:%M") if v.arrived_at else "?"
+        if v.departed_at:
+            departed = v.departed_at.strftime("%Y-%m-%d %H:%M")
+            dur = int((v.departed_at - v.arrived_at).total_seconds() / 60)
+            duration = f"{dur} min"
+        else:
+            departed = "-- active --"
+            dur = int((datetime.now() - v.arrived_at).total_seconds() / 60)
+            duration = f"~{dur} min (ongoing)"
+
+        print(f"{v.display_name:<20} {v.camera_name:<15} {arrived:<20} {departed:<20} {duration}")
+
+    print()
+
+
+def refs_main():
+    """List all configured references."""
+    create_tables()
+    session = get_session()
+    refs = get_all_references(session)
+
+    if not refs:
+        print("No references configured. Use `ring-ref` to create one.")
+        return
+
+    print(f"\n{'Name':<25} {'Display Name':<25} {'Category':<12}")
+    print("-" * 62)
+    for ref in refs:
+        print(f"{ref.name:<25} {ref.display_name:<25} {ref.category:<12}")
+    print()
 
 
 if __name__ == "__main__":

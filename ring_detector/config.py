@@ -33,6 +33,8 @@ class RingConfig:
     camera_name: str = os.getenv("RING_CAMERA_NAME", "")
     # Seconds without new motion to consider someone "departed"
     departure_timeout: int = int(os.getenv("DEPARTURE_TIMEOUT", "300"))
+    # Seconds to ignore duplicate motion events from same camera
+    cooldown_seconds: int = int(os.getenv("MOTION_COOLDOWN", "30"))
 
 
 @dataclass
@@ -55,6 +57,7 @@ class StorageConfig:
 @dataclass
 class NotifyConfig:
     ntfy_url: str = os.getenv("NTFY_URL", "http://ntfy.superdave.us/ring_cam")
+    attach_snapshot: bool = os.getenv("NTFY_ATTACH_SNAPSHOT", "true").lower() == "true"
 
 
 @dataclass

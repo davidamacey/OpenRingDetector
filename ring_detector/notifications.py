@@ -1,8 +1,9 @@
-"""Push notifications via ntfy."""
+"""Push notifications via ntfy with optional snapshot attachments."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import requests
 
@@ -16,17 +17,36 @@ def send_notification(
     title: str = "Ring Detector",
     tags: str = "camera",
     priority: str = "default",
+    snapshot_path: str | Path | None = None,
 ) -> None:
-    """Send a push notification via ntfy server."""
+    """Send a push notification via ntfy server, optionally with a snapshot image."""
+    headers = {
+        "Title": title,
+        "Tags": tags,
+        "Priority": priority,
+    }
+
     try:
+        if snapshot_path and settings.notify.attach_snapshot:
+            snapshot = Path(snapshot_path)
+            if snapshot.is_file():
+                headers["Filename"] = snapshot.name
+                headers["Message"] = message
+                with open(snapshot, "rb") as f:
+                    requests.put(
+                        url=settings.notify.ntfy_url,
+                        data=f,
+                        headers=headers,
+                        timeout=15,
+                    )
+                log.info("Notification sent with snapshot: %s", title)
+                return
+
+        # Text-only notification (no snapshot or snapshot not found)
         requests.post(
             url=settings.notify.ntfy_url,
             data=message.encode("utf-8"),
-            headers={
-                "Title": title,
-                "Tags": tags,
-                "Priority": priority,
-            },
+            headers=headers,
             timeout=10,
         )
         log.info("Notification sent: %s — %s", title, message)
@@ -34,37 +54,61 @@ def send_notification(
         log.exception("Failed to send notification")
 
 
-def notify_motion(camera_name: str, timestamp: str) -> None:
+def notify_motion(camera_name: str, detail: str, snapshot_path: str | None = None) -> None:
     send_notification(
-        message=f"Motion detected at {camera_name} ({timestamp})",
-        title="Motion Detected",
+        message=f"Motion at {camera_name} ({detail})",
+        title=f"Motion — {camera_name}",
         tags="camera,motion_detector",
+        snapshot_path=snapshot_path,
     )
 
 
-def notify_arrival(display_name: str, camera_name: str) -> None:
-    """Someone known has arrived."""
+def notify_arrival(
+    display_name: str,
+    camera_name: str,
+    detections_summary: str = "",
+    snapshot_path: str | None = None,
+) -> None:
+    """Known reference arrived."""
+    detail = f" ({detections_summary})" if detections_summary else ""
     send_notification(
-        message=f"{display_name} arrived at {camera_name}",
+        message=f"{display_name} arrived at {camera_name}{detail}",
         title=f"{display_name} — Arrived",
         tags="white_check_mark,car",
         priority="high",
+        snapshot_path=snapshot_path,
     )
 
 
 def notify_departure(display_name: str, camera_name: str, duration_mins: int) -> None:
-    """Someone known has left — time to pay!"""
+    """Known reference left — time to pay."""
     send_notification(
-        message=(f"{display_name} left {camera_name} after ~{duration_mins} min. Time to pay!"),
+        message=f"{display_name} left {camera_name} after ~{duration_mins} min. Time to pay!",
         title=f"{display_name} — Done! Pay Now",
         tags="money_with_wings,wave",
         priority="high",
     )
 
 
-def notify_unknown_visitor(camera_name: str) -> None:
+def notify_unknown_visitor(
+    camera_name: str,
+    detections_summary: str = "",
+    snapshot_path: str | None = None,
+) -> None:
+    detail = f" ({detections_summary})" if detections_summary else ""
     send_notification(
-        message=f"Unknown person/vehicle at {camera_name}",
-        title="Unknown Visitor",
+        message=f"Unknown visitor at {camera_name}{detail}",
+        title=f"Unknown Visitor — {camera_name}",
         tags="warning,camera",
+        snapshot_path=snapshot_path,
+    )
+
+
+def notify_ding(camera_name: str, snapshot_path: str | None = None) -> None:
+    send_notification(
+        message=f"Someone rang the doorbell at {camera_name}",
+        title=f"Doorbell — {camera_name}",
+        tags="bell,door",
+        priority="high",
+        snapshot_path=snapshot_path,
     )
