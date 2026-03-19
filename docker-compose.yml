@@ -14,33 +14,11 @@ services:
     volumes:
       - ring_data:/var/lib/postgresql/data
       - ./db-init-scripts:/docker-entrypoint-initdb.d
-    networks:
-      - ring_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  pgadmin:
-    container_name: ring-pgadmin
-    image: dpage/pgadmin4:latest
-    restart: always
-    env_file: .env
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
-    ports:
-      - "6060:80"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - ring_net
-
 volumes:
   ring_data:
-
-networks:
-  ring_net:
-    driver: bridge

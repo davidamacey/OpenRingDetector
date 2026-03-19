@@ -7,13 +7,13 @@ and embedding similarity search in a single PostgreSQL database.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from uuid import uuid4
 
 import numpy as np
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
-    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -28,7 +28,6 @@ from ring_detector.config import settings
 
 log = logging.getLogger(__name__)
 
-# Embedding dimensions
 YOLO_EMBED_DIM = 576
 FACE_EMBED_DIM = 512
 
@@ -41,7 +40,7 @@ class Metadata(Base):
     __tablename__ = "metadata"
 
     file_uuid = Column(String, primary_key=True, default=lambda: uuid4().hex)
-    date = Column(Date)
+    created_at = Column(DateTime, default=datetime.now)
     path = Column(String, unique=True)
     file_name = Column(String)
     height = Column(Integer)
@@ -68,22 +67,18 @@ class Detection(Base):
 
 
 class Embedding(Base):
-    """Vector embeddings for images and detected objects."""
-
     __tablename__ = "embeddings"
 
     uuid = Column(String, primary_key=True, default=lambda: uuid4().hex)
     file_uuid = Column(String, ForeignKey("metadata.file_uuid", ondelete="CASCADE"))
-    embed_type = Column(String)  # "full_image", "detection", "face"
+    embed_type = Column(String)  # full_image, detection, reference
     label = Column(String, default="none")
-    vector = Column(Vector(YOLO_EMBED_DIM))  # pgvector column
+    vector = Column(Vector(YOLO_EMBED_DIM))
 
     file_metadata = relationship("Metadata", back_populates="embeddings")
 
 
 class FaceEmbedding(Base):
-    """Face embeddings (different dimension than YOLO embeddings)."""
-
     __tablename__ = "face_embeddings"
 
     uuid = Column(String, primary_key=True, default=lambda: uuid4().hex)
@@ -95,33 +90,31 @@ class FaceEmbedding(Base):
 
 
 class Reference(Base):
-    """Named reference vectors for known vehicles/objects."""
-
     __tablename__ = "references"
 
     uuid = Column(String, primary_key=True, default=lambda: uuid4().hex)
-    name = Column(String, unique=True)  # e.g. "cleaners_car", "yard_guy"
-    display_name = Column(String)  # e.g. "Cleaner's Car"
-    category = Column(String, default="vehicle")  # "vehicle", "person", "other"
+    name = Column(String, unique=True)
+    display_name = Column(String)
+    category = Column(String, default="vehicle")
     vector = Column(Vector(YOLO_EMBED_DIM))
 
 
 class VisitEvent(Base):
-    """Tracks arrival/departure of known references (cleaner, yard guy, etc.)."""
+    """Tracks arrival/departure of known references."""
 
     __tablename__ = "visit_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    reference_name = Column(String)  # FK-ish to references.name
+    reference_name = Column(String, index=True)
     display_name = Column(String)
     camera_name = Column(String)
     arrived_at = Column(DateTime)
+    last_motion_at = Column(DateTime)  # updated on each motion during visit
     departed_at = Column(DateTime, nullable=True)
     snapshot_path = Column(String, nullable=True)
-    notified_departure = Column(Integer, default=0)  # 0=no, 1=yes
 
 
-# --- Engine / Session Management ---
+# --- Engine / Session ---
 
 _engine = None
 _SessionFactory = None
@@ -130,7 +123,7 @@ _SessionFactory = None
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(settings.db.url, echo=False)
+        _engine = create_engine(settings.db.url, pool_pre_ping=True)
     return _engine
 
 
@@ -142,16 +135,15 @@ def get_session() -> Session:
 
 
 def create_tables() -> None:
-    """Create all tables and enable pgvector extension."""
     engine = get_engine()
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
     Base.metadata.create_all(engine)
-    log.info("Database tables created (pgvector enabled)")
+    log.info("Database tables ready (pgvector enabled)")
 
 
-# --- Bulk Operations ---
+# --- Bulk Inserts ---
 
 
 def insert_metadata_bulk(session: Session, data: list[dict]) -> None:
@@ -171,7 +163,6 @@ def insert_embeddings_bulk(
     embed_type: str = "full_image",
     labels: list[str] | None = None,
 ) -> None:
-    """Bulk insert embeddings with pgvector."""
     labels = labels or ["none"] * len(file_uuids)
     data = [
         {
@@ -209,7 +200,7 @@ def insert_face_embeddings_bulk(
     session.commit()
 
 
-# --- Reference Management ---
+# --- References ---
 
 
 def upsert_reference(
@@ -219,21 +210,21 @@ def upsert_reference(
     vector: list[float],
     category: str = "vehicle",
 ) -> None:
-    """Insert or update a reference vector."""
     existing = session.query(Reference).filter_by(name=name).first()
     if existing:
         existing.vector = vector
         existing.display_name = display_name
         existing.category = category
     else:
-        ref = Reference(
-            uuid=uuid4().hex,
-            name=name,
-            display_name=display_name,
-            category=category,
-            vector=vector,
+        session.add(
+            Reference(
+                uuid=uuid4().hex,
+                name=name,
+                display_name=display_name,
+                category=category,
+                vector=vector,
+            )
         )
-        session.add(ref)
     session.commit()
     log.info("Reference '%s' saved", display_name)
 
@@ -246,7 +237,7 @@ def get_reference_by_name(session: Session, name: str) -> Reference | None:
     return session.query(Reference).filter_by(name=name).first()
 
 
-# --- Vector Similarity Search ---
+# --- Vector Search ---
 
 
 def find_similar_embeddings(
@@ -267,7 +258,12 @@ def find_similar_embeddings(
     q = q.order_by("distance").limit(limit)
 
     return [
-        {"uuid": row.uuid, "file_uuid": row.file_uuid, "label": row.label, "distance": row.distance}
+        {
+            "uuid": row.uuid,
+            "file_uuid": row.file_uuid,
+            "label": row.label,
+            "distance": row.distance,
+        }
         for row in q.all()
     ]
 
@@ -275,9 +271,9 @@ def find_similar_embeddings(
 def match_against_references(
     session: Session,
     vectors: list[list[float]],
-    threshold: float = 0.15,  # cosine distance (lower = more similar)
+    threshold: float = 0.15,
 ) -> list[dict]:
-    """Check a list of vectors against all references. Returns matches."""
+    """Compare vectors against all references. Returns matches above threshold."""
     refs = get_all_references(session)
     if not refs:
         return []
@@ -287,9 +283,10 @@ def match_against_references(
         vec_np = np.array(vec)
         for ref in refs:
             ref_np = np.array(ref.vector)
-            # Cosine similarity
-            norm_product = np.linalg.norm(vec_np) * np.linalg.norm(ref_np)
-            similarity = float(np.dot(vec_np, ref_np) / norm_product)
+            denom = np.linalg.norm(vec_np) * np.linalg.norm(ref_np)
+            if denom == 0:
+                continue
+            similarity = float(np.dot(vec_np, ref_np) / denom)
             if similarity > (1 - threshold):
                 matches.append(
                     {
@@ -307,17 +304,15 @@ def match_against_references(
 
 
 def get_all_image_paths(session: Session) -> list[str]:
-    paths = session.query(Metadata.path).all()
-    return [p[0] for p in paths]
+    return [p[0] for p in session.query(Metadata.path).all()]
 
 
 def get_new_paths(session: Session, candidate_paths: list[str]) -> list[str]:
-    """Return paths not already in the database."""
     existing = set(p[0] for p in session.query(Metadata.path).all())
     return [p for p in candidate_paths if p not in existing]
 
 
-# --- Visit Event Tracking ---
+# --- Visit Tracking ---
 
 
 def record_arrival(
@@ -327,28 +322,30 @@ def record_arrival(
     camera_name: str,
     snapshot_path: str | None = None,
 ) -> VisitEvent:
-    """Record that a known reference arrived. Returns the visit event."""
-    from datetime import datetime
-
+    now = datetime.now()
     visit = VisitEvent(
         reference_name=reference_name,
         display_name=display_name,
         camera_name=camera_name,
-        arrived_at=datetime.now(),
+        arrived_at=now,
+        last_motion_at=now,
         snapshot_path=snapshot_path,
     )
     session.add(visit)
     session.commit()
-    log.info("Visit recorded: %s arrived at %s", display_name, camera_name)
+    log.info("Visit started: %s at %s", display_name, camera_name)
     return visit
 
 
-def record_departure(session: Session, visit: VisitEvent) -> int:
-    """Mark a visit as departed. Returns visit duration in minutes."""
-    from datetime import datetime
+def extend_visit(session: Session, visit: VisitEvent) -> None:
+    """Update last_motion_at to push back departure timeout."""
+    visit.last_motion_at = datetime.now()
+    session.commit()
 
+
+def record_departure(session: Session, visit: VisitEvent) -> int:
+    """Mark visit as departed. Returns duration in minutes."""
     visit.departed_at = datetime.now()
-    visit.notified_departure = 1
     session.commit()
     duration = int((visit.departed_at - visit.arrived_at).total_seconds() / 60)
     log.info("%s departed after %d min", visit.display_name, duration)
@@ -356,12 +353,10 @@ def record_departure(session: Session, visit: VisitEvent) -> int:
 
 
 def get_active_visits(session: Session) -> list[VisitEvent]:
-    """Get all visits that haven't departed yet."""
     return session.query(VisitEvent).filter(VisitEvent.departed_at.is_(None)).all()
 
 
 def get_active_visit_by_reference(session: Session, reference_name: str) -> VisitEvent | None:
-    """Get active (not departed) visit for a specific reference."""
     return (
         session.query(VisitEvent)
         .filter(

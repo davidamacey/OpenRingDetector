@@ -1,8 +1,8 @@
 """Main watcher: push-based Ring events → detect → identify → track → notify.
 
 Uses RingEventListener (Firebase push) for near-instant motion alerts.
-Tracks arrival/departure of known references (cleaner, yard guy, etc.)
-and sends "arrived" and "time to pay" notifications with snapshot images.
+Tracks arrival/departure of known references and sends notifications
+with snapshot images via ntfy.
 """
 
 from __future__ import annotations
@@ -14,9 +14,11 @@ import sys
 from datetime import datetime
 
 from ring_detector import ring_api
+from ring_detector.captioner import caption_image
 from ring_detector.config import settings
 from ring_detector.database import (
     create_tables,
+    extend_visit,
     get_active_visit_by_reference,
     get_active_visits,
     get_all_references,
@@ -53,14 +55,11 @@ class RingWatcher:
         self.listener = None
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self._shutdown = asyncio.Event()
-        # Cooldown: track last processed time per camera to avoid spam
         self._last_processed: dict[str, datetime] = {}
-        # Dedup: track processed Ring event IDs
         self._seen_event_ids: set[int] = set()
-        self._max_seen_ids = 500  # rolling cap
+        self._max_seen_ids = 500
 
     async def startup(self) -> None:
-        """Initialize all components."""
         log.info("Starting Ring Watcher...")
 
         create_tables()
@@ -68,73 +67,54 @@ class RingWatcher:
         self.models = load_models()
         self.ring = await ring_api.authenticate()
 
-        # List cameras
         devices = self.ring.devices()
         for dtype in ("doorbells", "stickup_cams", "other"):
             for dev in devices.get(dtype, []):
                 log.info("  Camera: %s (%s)", dev.name, dtype)
 
-        # References
         refs = get_all_references(self.session)
-        log.info("Loaded %d reference(s):", len(refs))
+        log.info("References: %d loaded", len(refs))
         for ref in refs:
             log.info("  - %s (%s)", ref.display_name, ref.category)
 
-        # Captioner (optional — requires Ollama running)
-        from ring_detector.captioner import is_available as captioner_available
-
         if settings.captioner.enabled:
-            if captioner_available():
-                log.info("VLM captioner: %s (Ollama)", settings.captioner.model)
-            else:
-                log.warning("Captioner enabled but Ollama not reachable or model not loaded")
+            from ring_detector.captioner import is_available
 
-        # Push event listener
+            if is_available():
+                log.info("Captioner: %s via Ollama", settings.captioner.model)
+            else:
+                log.warning("Captioner enabled but not available")
+
         self.listener = ring_api.create_event_listener(
             self.ring,
-            on_motion=self._on_motion_event,
-            on_ding=self._on_ding_event,
+            on_motion=lambda e: self._event_queue.put_nowait(("motion", e)),
+            on_ding=lambda e: self._event_queue.put_nowait(("ding", e)),
         )
-
         log.info("Ring Watcher ready")
 
-    def _on_motion_event(self, event) -> None:
-        self._event_queue.put_nowait(("motion", event))
-
-    def _on_ding_event(self, event) -> None:
-        self._event_queue.put_nowait(("ding", event))
-
     def _is_duplicate(self, event) -> bool:
-        """Check if we've already processed this Ring event ID."""
         eid = getattr(event, "id", None)
         if eid is None:
             return False
         if eid in self._seen_event_ids:
             return True
         self._seen_event_ids.add(eid)
-        # Keep set bounded
         if len(self._seen_event_ids) > self._max_seen_ids:
-            to_remove = list(self._seen_event_ids)[: self._max_seen_ids // 2]
-            self._seen_event_ids -= set(to_remove)
+            self._seen_event_ids = set(list(self._seen_event_ids)[self._max_seen_ids // 2 :])
         return False
 
     def _is_on_cooldown(self, camera_name: str) -> bool:
-        """Check if this camera is in cooldown period."""
         last = self._last_processed.get(camera_name)
         if last is None:
             return False
-        elapsed = (datetime.now() - last).total_seconds()
-        return elapsed < settings.ring.cooldown_seconds
+        return (datetime.now() - last).total_seconds() < settings.ring.cooldown_seconds
 
-    def _build_detection_summary(self, df_dets) -> str:
-        """Build a short summary string like 'car, person x2'."""
+    @staticmethod
+    def _detection_summary(df_dets) -> str:
         if len(df_dets) == 0:
             return ""
         counts = df_dets["class_name"].value_counts()
-        parts = []
-        for cls, count in counts.items():
-            parts.append(f"{cls} x{count}" if count > 1 else cls)
-        return ", ".join(parts)
+        return ", ".join(f"{cls} x{n}" if n > 1 else cls for cls, n in counts.items())
 
     # --- Event Processing ---
 
@@ -142,136 +122,127 @@ class RingWatcher:
         while not self._shutdown.is_set():
             try:
                 kind, event = await asyncio.wait_for(self._event_queue.get(), timeout=10.0)
-
                 if self._is_duplicate(event):
                     continue
 
-                cam_name = getattr(event, "device_name", None) or settings.ring.camera_name
+                cam = getattr(event, "device_name", None) or settings.ring.camera_name or "Camera"
 
                 if kind == "ding":
-                    snapshot = await ring_api.download_snapshot(self.ring, cam_name)
-                    notify_ding(cam_name, str(snapshot) if snapshot else None)
+                    snap = await ring_api.download_snapshot(self.ring, cam)
+                    notify_ding(cam, str(snap) if snap else None)
                 elif kind == "motion":
-                    await self._handle_motion(event, cam_name)
+                    await self._handle_motion(cam)
 
             except TimeoutError:
                 continue
             except Exception:
                 log.exception("Error processing event")
 
-    async def _handle_motion(self, event, cam_name: str) -> None:
-        """Motion event pipeline: cooldown → visit check → snapshot → detect → match → notify."""
+    async def _handle_motion(self, cam_name: str) -> None:
         now = datetime.now()
-        timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        ts = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # --- Extend active visits ---
-        active_visits = get_active_visits(self.session)
-        if active_visits:
-            for visit in active_visits:
-                visit.arrived_at = now
-            self.session.commit()
+        # Extend active visits instead of re-detecting
+        active = get_active_visits(self.session)
+        if active:
+            for v in active:
+                extend_visit(self.session, v)
             log.info(
-                "Motion extends %d active visit(s): %s",
-                len(active_visits),
-                ", ".join(v.display_name for v in active_visits),
+                "Motion extends %d visit(s): %s",
+                len(active),
+                ", ".join(v.display_name for v in active),
             )
             return
 
-        # --- Cooldown check (only if no active visits) ---
         if self._is_on_cooldown(cam_name):
-            log.debug("Cooldown active for %s, skipping", cam_name)
+            log.debug("Cooldown active for %s", cam_name)
             return
         self._last_processed[cam_name] = now
 
-        log.info("Processing motion at %s (%s)", cam_name, timestamp_str)
+        log.info("Processing motion at %s (%s)", cam_name, ts)
 
-        # --- Download snapshot ---
+        # Snapshot
         snapshot_path = await ring_api.download_snapshot(self.ring, cam_name)
-        if snapshot_path is None:
-            notify_motion(cam_name, timestamp_str)
+        snap_str = str(snapshot_path) if snapshot_path else None
+        if not snapshot_path:
+            notify_motion(cam_name, ts)
             return
 
         # Archive video in background
         asyncio.create_task(self._archive_video(cam_name))
 
-        # --- YOLO detection ---
-        paths, resized, padded = prepare_batch([str(snapshot_path)])
+        # Detection
+        paths, resized, _padded = prepare_batch([snap_str])
         if not paths:
-            notify_motion(cam_name, timestamp_str, str(snapshot_path))
+            notify_motion(cam_name, ts, snap_str)
             return
 
-        df_meta, df_dets, img_crops = run_detection(self.models, resized, paths)
-        summary = self._build_detection_summary(df_dets)
+        _meta, df_dets, img_crops = run_detection(self.models, resized, paths)
+        summary = self._detection_summary(df_dets)
 
-        # --- Optional VLM captioning ---
-        caption = None
-        if len(df_dets) > 0:
-            from ring_detector.captioner import caption_image
-
-            caption = caption_image(snapshot_path)
-            if caption:
-                summary = caption  # Use rich caption instead of class list
+        # VLM caption (replaces class list when available)
+        caption = caption_image(snapshot_path) if len(df_dets) > 0 else None
+        if caption:
+            summary = caption
 
         if len(df_dets) == 0:
-            notify_motion(cam_name, timestamp_str, str(snapshot_path))
+            notify_motion(cam_name, ts, snap_str)
             return
 
-        # --- Vehicle matching ---
-        vehicle_classes = {2, 7}  # car, truck
-        vehicle_dets = df_dets[df_dets["class_id"].isin(vehicle_classes)]
+        # Vehicle matching
+        vehicle_dets = df_dets[df_dets["class_id"].isin({2, 7})]
         person_dets = df_dets[df_dets["class_name"] == "person"]
         matched_refs = []
 
         if len(vehicle_dets) > 0 and img_crops:
-            vehicle_indices = vehicle_dets.index.tolist()
-            vehicle_crops = [img_crops[i] for i in vehicle_indices if i < len(img_crops)]
-
-            if vehicle_crops:
-                padded_crops = [pad_to_square(c) for c in vehicle_crops]
+            indices = vehicle_dets.index.tolist()
+            crops = [img_crops[i] for i in indices if i < len(img_crops)]
+            if crops:
+                padded_crops = [pad_to_square(c) for c in crops]
                 embeddings = compute_yolo_embeddings(self.models, padded_crops)
                 matches = match_against_references(self.session, embeddings)
-
                 seen = set()
-                for match in matches:
-                    if match["reference_name"] not in seen:
-                        matched_refs.append(match)
-                        seen.add(match["reference_name"])
-
+                for m in matches:
+                    if m["reference_name"] not in seen:
+                        matched_refs.append(m)
+                        seen.add(m["reference_name"])
                 clear_gpu_memory()
 
-        # --- Record arrivals & notify ---
-        for match in matched_refs:
-            ref_name = match["reference_name"]
-            display_name = match["display_name"]
-
-            existing = get_active_visit_by_reference(self.session, ref_name)
+        # Arrivals
+        for m in matched_refs:
+            existing = get_active_visit_by_reference(self.session, m["reference_name"])
             if existing:
-                existing.arrived_at = now
-                self.session.commit()
+                extend_visit(self.session, existing)
             else:
-                record_arrival(self.session, ref_name, display_name, cam_name, str(snapshot_path))
-                notify_arrival(display_name, cam_name, summary, str(snapshot_path))
+                record_arrival(
+                    self.session,
+                    m["reference_name"],
+                    m["display_name"],
+                    cam_name,
+                    snap_str,
+                )
+                notify_arrival(m["display_name"], cam_name, summary, snap_str)
 
-        # --- Unmatched detections ---
+        # Unmatched
         if not matched_refs:
             if len(person_dets) > 0:
-                notify_unknown_visitor(cam_name, summary, str(snapshot_path))
+                notify_unknown_visitor(cam_name, summary, snap_str)
             else:
-                notify_motion(cam_name, f"{timestamp_str} — {summary}", str(snapshot_path))
+                notify_motion(cam_name, f"{ts} — {summary}", snap_str)
 
     # --- Background Tasks ---
 
     async def _check_departures(self) -> None:
-        """Check if anyone who arrived has left (no motion for timeout)."""
-        timeout_secs = settings.ring.departure_timeout
+        timeout = settings.ring.departure_timeout
         while not self._shutdown.is_set():
             await asyncio.sleep(60)
             try:
                 now = datetime.now()
-                for visit in get_active_visits(self.session):
-                    if (now - visit.arrived_at).total_seconds() > timeout_secs:
-                        duration_mins = record_departure(self.session, visit)
-                        notify_departure(visit.display_name, visit.camera_name, duration_mins)
+                for v in get_active_visits(self.session):
+                    elapsed = (now - v.last_motion_at).total_seconds()
+                    if elapsed > timeout:
+                        dur = record_departure(self.session, v)
+                        notify_departure(v.display_name, v.camera_name, dur)
             except Exception:
                 log.exception("Error checking departures")
 
@@ -280,7 +251,6 @@ class RingWatcher:
             await asyncio.sleep(3600)
             try:
                 await self.ring.async_update_data()
-                log.debug("Ring session refreshed")
             except Exception:
                 log.exception("Failed to refresh Ring session")
 
@@ -290,20 +260,18 @@ class RingWatcher:
         except Exception:
             log.exception("Failed to archive video")
 
-    # --- Main Loop ---
+    # --- Main ---
 
     async def run(self) -> None:
         await self.startup()
-
         await self.listener.start(timeout=10)
-        log.info("Event listener started (Firebase push)")
+        log.info("Listening for events (Firebase push)")
 
         tasks = [
-            asyncio.create_task(self._process_events(), name="event-processor"),
-            asyncio.create_task(self._check_departures(), name="departure-checker"),
-            asyncio.create_task(self._refresh_ring_session(), name="session-refresh"),
+            asyncio.create_task(self._process_events(), name="events"),
+            asyncio.create_task(self._check_departures(), name="departures"),
+            asyncio.create_task(self._refresh_ring_session(), name="refresh"),
         ]
-
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -313,7 +281,6 @@ class RingWatcher:
 
 
 def main():
-    """Entry point for ring-watch command."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -322,17 +289,17 @@ def main():
 
     watcher = RingWatcher()
 
-    def _signal_handler(sig, frame):
+    def _shutdown(sig, _):
         log.info("Received %s, shutting down...", signal.Signals(sig).name)
         watcher._shutdown.set()
 
-    signal.signal(signal.SIGTERM, _signal_handler)
-    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
 
     try:
         asyncio.run(watcher.run())
     except KeyboardInterrupt:
-        log.info("Shutting down Ring Watcher")
+        log.info("Shutting down")
 
 
 if __name__ == "__main__":

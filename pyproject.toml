@@ -51,6 +51,7 @@ ring-embed = "ring_detector.cli:embed_main"
 ring-ref = "ring_detector.cli:ref_main"
 ring-visits = "ring_detector.cli:visits_main"
 ring-refs = "ring_detector.cli:refs_main"
+ring-status = "ring_detector.cli:status_main"
 
 [tool.ruff]
 line-length = 100
