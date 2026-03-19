@@ -1,181 +1,46 @@
-version: '3'
-
 services:
-  # ring-dash:
-  #   container_name: ring-dash
-  #   image: 'ring-cuda:latest311sm'
-  #   restart: always
-  #   build:
-  #     dockerfile: Dockerfile
-  #     context: ./
-  #   ports:
-  #     - '8090:8090'
-  #   depends_on:
-  #     - db
-  #   stdin_open: true
-  #   tty: true
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     # PostgreSQL Credentials
-  #     - DB_USERNAME=${DB_USERNAME}
-  #     - DB_PW=${DB_PW}
-  #     - DB_HOST=${DB_HOST}
-  #     - DB_PORT=${DB_PORT}
-  #     - DB_NAME=${DB_NAME}
-  #   volumes:
-  #     # view at sudo ls /var/lib/docker/volumes/ring_ring_files/_data/
-  #     - ring_files:/static
-  #     - $HOME/Desktop/SC_INPUT_DATA:/static/SC_INPUT_DATA
-  #     - $HOME/repos/ring/pages:/pages
-  #     - $HOME/repos/ring/sc_common:/sc_common
-  #     - $HOME/repos/ring/dash_app.py:/dash_app.py
-  #     - $HOME/repos/ring/assets/bootstrap.min.css:/assets/bootstrap.min.css
-  #   networks:
-  #     - ring_net
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [ gpu ]
-
   db:
     container_name: ring-db
-    image: postgres:latest
+    image: pgvector/pgvector:pg16
     restart: always
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_DB=${DB_NAME}
-      - PGDATA=/var/lib/postgresql/data/pgdata
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       - ring_data:/var/lib/postgresql/data
       - ./db-init-scripts:/docker-entrypoint-initdb.d
-      #- ./schema_dump.sql:/docker-entrypoint-initdb.d/schema_dump.sql
     networks:
       - ring_net
-
-  etcd:
-    container_name: milvus-etcd
-    image: quay.io/coreos/etcd:v3.5.5
-    restart: always
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    volumes:
-      - ./etcd-vol/etc_data:/etcd
-    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     healthcheck:
-      test: [ "CMD", "etcdctl", "endpoint", "health" ]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - ring_net
-
-  minio:
-    container_name: milvus-minio
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    restart: always
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    ports:
-      - "9055:9001"
-      - "9054:9000"
-    volumes:
-      - minio_files:/minio_data
-    command: minio server /minio_data --console-address ":9055"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "curl",
-          "-f",
-          "http://localhost:9000/minio/health/live"
-        ]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - ring_net
-
-  milvus-db:
-    container_name: milvus-standalone
-    image: milvusdb/milvus:v2.3.2
-    command: [ "milvus", "run", "standalone" ]
-    restart: always
-    environment:
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
-    volumes:
-      - milvus_data:/var/lib/milvus
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9091/healthz" ]
-      interval: 30s
-      start_period: 90s
-      timeout: 20s
-      retries: 3
-    ports:
-      - "19530:19530"
-      - "9091:9091"
-    depends_on:
-      - "etcd"
-      - "minio"
-    networks:
-      - ring_net
-
-  # minio:
-  #   container_name: ring-minio
-  #   command: server /data --console-address ":9001"
-  #   environment:
-  #     - MINIO_ROOT_USER=${MINIO_USER}
-  #     - MINIO_ROOT_PASSWORD=${MINIO_PW}
-  #   image: quay.io/minio/minio:latest
-  #   ports:
-  #     - '9000:9000'
-  #     - '9001:9001'
-  #   volumes:
-  #     - ring_files:/data
-  #   restart: always
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   pgadmin:
     container_name: ring-pgadmin
     image: dpage/pgadmin4:latest
     restart: always
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
-      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
     ports:
       - "6060:80"
     depends_on:
-      - db
-    volumes:
-      - ./pgadmin/servers.json:/pgadmin4/servers.json
+      db:
+        condition: service_healthy
     networks:
       - ring_net
 
 volumes:
-  ring_data: null
-  ring_files: null
-  milvus_data: null
-  minio_files: null
-  etc_data: null
+  ring_data:
 
 networks:
   ring_net:
     driver: bridge
-
-# docker-compose -f docker-compose-local.yml build && docker-compose -f docker-compose-local.yml up -d
-# docker-compose -f docker/docker-compose-local.yml down -v
-# docker-compose -f docker-compose-local.yml down -v

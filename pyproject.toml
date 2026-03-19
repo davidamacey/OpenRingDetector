@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ring-detector"
+version = "2.0.0"
+description = "Ring doorbell motion detection, vehicle/person recognition, and custom notifications"
+requires-python = ">=3.12"
+dependencies = [
+    # Ring API (async since 0.8+)
+    "ring-doorbell>=0.9.14",
+
+    # ML / Detection — pinned to facenet-pytorch compatibility window
+    "ultralytics>=8.3",
+    "torch>=2.2,<2.3",
+    "torchvision>=0.17,<0.18",
+    "facenet-pytorch>=2.6",
+    "opencv-python-headless>=4.9",
+    "Pillow>=10.2,<10.3",
+
+    # Database (PostgreSQL + pgvector)
+    "sqlalchemy>=2.0.40",
+    "psycopg2-binary>=2.9",
+    "pgvector>=0.4",
+
+    # Notifications
+    "requests>=2.32",
+
+    # Utilities
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "tqdm>=4.66",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11",
+    "pytest>=8.0",
+    "pre-commit>=4.0",
+]
+training = [
+    "rawpy>=0.25",
+]
+
+[project.scripts]
+ring-watch = "ring_detector.watcher:main"
+ring-embed = "ring_detector.cli:embed_main"
+ring-ref = "ring_detector.cli:ref_main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ring_detector"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["ring_detector*"]
