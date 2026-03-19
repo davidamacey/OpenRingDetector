@@ -1,0 +1,28 @@
+# Optional services — uncomment what you need.
+# Usage: docker compose up -d (merges automatically with docker-compose.yml)
+
+services:
+  # --- Scene Captioning via Ollama + Gemma 3 ---
+  # Uncomment to enable VLM captioning. Then set CAPTIONER_ENABLED=true in .env.
+  # First run: docker compose exec ollama ollama pull gemma3:4b
+
+  # ollama:
+  #   container_name: ring-ollama
+  #   image: ollama/ollama:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   networks:
+  #     - ring_net
+
+# volumes:
+#   ollama_data:

@@ -80,6 +80,15 @@ class RingWatcher:
         for ref in refs:
             log.info("  - %s (%s)", ref.display_name, ref.category)
 
+        # Captioner (optional — requires Ollama running)
+        from ring_detector.captioner import is_available as captioner_available
+
+        if settings.captioner.enabled:
+            if captioner_available():
+                log.info("VLM captioner: %s (Ollama)", settings.captioner.model)
+            else:
+                log.warning("Captioner enabled but Ollama not reachable or model not loaded")
+
         # Push event listener
         self.listener = ring_api.create_event_listener(
             self.ring,
@@ -193,6 +202,15 @@ class RingWatcher:
 
         df_meta, df_dets, img_crops = run_detection(self.models, resized, paths)
         summary = self._build_detection_summary(df_dets)
+
+        # --- Optional VLM captioning ---
+        caption = None
+        if len(df_dets) > 0:
+            from ring_detector.captioner import caption_image
+
+            caption = caption_image(snapshot_path)
+            if caption:
+                summary = caption  # Use rich caption instead of class list
 
         if len(df_dets) == 0:
             notify_motion(cam_name, timestamp_str, str(snapshot_path))
