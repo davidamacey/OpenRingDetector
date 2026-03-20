@@ -73,7 +73,7 @@ class CaptionerConfig:
     enabled: bool = os.getenv("CAPTIONER_ENABLED", "false").lower() == "true"
     ollama_url: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
     model: str = os.getenv("CAPTIONER_MODEL", "gemma3:4b")
-    timeout: int = int(os.getenv("CAPTIONER_TIMEOUT", "30"))
+    timeout: int = int(os.getenv("CAPTIONER_TIMEOUT", "60"))
 
 
 @dataclass

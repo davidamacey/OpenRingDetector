@@ -25,9 +25,9 @@ from ring_detector.config import settings
 log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "You are a security camera assistant. Describe what you see in this camera snapshot "
-    "in 1-2 concise sentences. Focus on: people (count, appearance, actions), vehicles "
-    "(type, color, location), and any notable activity. Be factual, not speculative."
+    "Describe this security camera image in 1-2 short sentences. "
+    "List people (count, actions), vehicles (type, color), and activity. "
+    "Do not start with 'Here is' or 'This image shows'. Be direct and factual."
 )
 
 
@@ -69,6 +69,21 @@ def caption_image(image_path: str | Path) -> str | None:
         response.raise_for_status()
         data = response.json()
         caption = data.get("message", {}).get("content", "").strip()
+
+        # Strip common LLM preamble
+        for prefix in (
+            "Here's a description",
+            "Here is a description",
+            "This image shows",
+            "The image shows",
+        ):
+            if caption.lower().startswith(prefix.lower()):
+                # Find the first colon or period after the prefix and skip it
+                idx = caption.find(":", len(prefix))
+                if idx == -1:
+                    idx = caption.find(".", len(prefix))
+                if idx != -1:
+                    caption = caption[idx + 1 :].strip()
 
         if caption:
             log.info("Caption: %s", caption[:100])
