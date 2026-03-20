@@ -26,6 +26,7 @@ from ring_detector.database import (
     match_against_references,
     record_arrival,
     record_departure,
+    record_event,
     run_migrations,
     store_watcher_face_embedding,
 )
@@ -147,7 +148,14 @@ class RingWatcher:
 
                 if kind == "ding":
                     snap = await ring_api.download_snapshot(self.ring, cam)
-                    notify_ding(cam, str(snap) if snap else None)
+                    snap_str = str(snap) if snap else None
+                    record_event(
+                        self.session,
+                        event_type="ding",
+                        camera_name=cam,
+                        snapshot_path=snap_str,
+                    )
+                    notify_ding(cam, snap_str)
                 elif kind == "motion":
                     await self._handle_motion(cam)
 
@@ -269,13 +277,35 @@ class RingWatcher:
             existing = get_active_visit_by_reference(self.session, m["reference_name"])
             if existing:
                 extend_visit(self.session, existing)
+                record_event(
+                    self.session,
+                    event_type="motion",
+                    camera_name=cam_name,
+                    snapshot_path=snap_str,
+                    detection_summary=summary,
+                    reference_name=m["reference_name"],
+                    display_name=m["display_name"],
+                    visit_event_id=existing.id,
+                    caption=caption,
+                )
             else:
-                record_arrival(
+                visit = record_arrival(
                     self.session,
                     m["reference_name"],
                     m["display_name"],
                     cam_name,
                     snap_str,
+                )
+                record_event(
+                    self.session,
+                    event_type="arrival",
+                    camera_name=cam_name,
+                    snapshot_path=snap_str,
+                    detection_summary=summary,
+                    reference_name=m["reference_name"],
+                    display_name=m["display_name"],
+                    visit_event_id=visit.id,
+                    caption=caption,
                 )
                 notify_arrival(m["display_name"], cam_name, combined_summary, snap_str)
 
@@ -291,30 +321,37 @@ class RingWatcher:
                 if existing:
                     extend_visit(self.session, existing)
                 else:
-                    record_arrival(
+                    visit = record_arrival(
                         self.session, face_ref, fm["display_name"], cam_name, snap_str
+                    )
+                    record_event(
+                        self.session,
+                        event_type="arrival",
+                        camera_name=cam_name,
+                        snapshot_path=snap_str,
+                        detection_summary=summary,
+                        display_name=fm["display_name"],
+                        visit_event_id=visit.id,
+                        caption=caption,
                     )
                     notify_known_person(fm["display_name"], cam_name, summary, snap_str)
 
         # --- Unknown visitor (no known vehicle or face) ---
         if not matched_refs and not face_matches:
+            record_event(
+                self.session,
+                event_type="motion",
+                camera_name=cam_name,
+                snapshot_path=snap_str,
+                detection_summary=summary,
+                caption=caption,
+            )
             if len(person_dets) > 0 or unmatched_face_embeddings:
                 notify_unknown_visitor(cam_name, summary, snap_str)
             else:
                 notify_motion(cam_name, f"{ts} — {summary}", snap_str)
 
     # --- Background Tasks ---
-
-    async def _wait_or_shutdown(self, seconds: float) -> bool:
-        """Sleep for `seconds`, waking early if shutdown is requested.
-
-        Returns True if shutdown was triggered, False if sleep completed normally.
-        """
-        try:
-            await asyncio.wait_for(self._shutdown.wait(), timeout=seconds)
-            return True
-        except TimeoutError:
-            return False
 
     async def _check_departures(self) -> None:
         timeout = settings.ring.departure_timeout
@@ -327,6 +364,15 @@ class RingWatcher:
                     elapsed = (now - v.last_motion_at).total_seconds()
                     if elapsed > timeout:
                         dur = record_departure(self.session, v)
+                        record_event(
+                            self.session,
+                            event_type="departure",
+                            camera_name=v.camera_name,
+                            snapshot_path=v.snapshot_path,
+                            reference_name=v.reference_name,
+                            display_name=v.display_name,
+                            visit_event_id=v.id,
+                        )
                         notify_departure(v.display_name, v.camera_name, dur)
             except Exception:
                 log.exception("Error checking departures")

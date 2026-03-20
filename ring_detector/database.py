@@ -125,6 +125,26 @@ class VisitEvent(Base):
     snapshot_path = Column(String, nullable=True)
 
 
+class Event(Base):
+    """Raw Ring event log — one row per motion/ding/arrival/departure."""
+
+    __tablename__ = "events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_type = Column(String, nullable=False)  # motion | ding | arrival | departure
+    camera_name = Column(String, nullable=False)
+    occurred_at = Column(DateTime, default=datetime.now, index=True)
+    file_uuid = Column(String, ForeignKey("metadata.file_uuid", ondelete="SET NULL"), nullable=True)
+    snapshot_path = Column(String, nullable=True)
+    detection_summary = Column(String, nullable=True)
+    reference_name = Column(String, nullable=True)
+    display_name = Column(String, nullable=True)
+    visit_event_id = Column(
+        Integer, ForeignKey("visit_events.id", ondelete="SET NULL"), nullable=True
+    )
+    caption = Column(String, nullable=True)
+
+
 # --- Engine / Session ---
 
 _engine = None
@@ -502,3 +522,86 @@ def get_active_visit_by_reference(session: Session, reference_name: str) -> Visi
         )
         .first()
     )
+
+
+# --- Event Log ---
+
+
+def record_event(
+    session: Session,
+    event_type: str,
+    camera_name: str,
+    snapshot_path: str | None = None,
+    detection_summary: str | None = None,
+    reference_name: str | None = None,
+    display_name: str | None = None,
+    visit_event_id: int | None = None,
+    caption: str | None = None,
+    file_uuid: str | None = None,
+) -> Event:
+    """Insert a raw event record and fire pg_notify for WebSocket broadcast."""
+    import json
+
+    now = datetime.now()
+    event = Event(
+        event_type=event_type,
+        camera_name=camera_name,
+        occurred_at=now,
+        file_uuid=file_uuid,
+        snapshot_path=snapshot_path,
+        detection_summary=detection_summary,
+        reference_name=reference_name,
+        display_name=display_name,
+        visit_event_id=visit_event_id,
+        caption=caption,
+    )
+    session.add(event)
+    session.flush()  # get auto-generated id before commit
+
+    payload = {
+        "id": event.id,
+        "event_type": event_type,
+        "camera_name": camera_name,
+        "occurred_at": now.isoformat(),
+        "snapshot_path": snapshot_path,
+        "detection_summary": detection_summary,
+        "reference_name": reference_name,
+        "display_name": display_name,
+        "visit_event_id": visit_event_id,
+        "caption": caption,
+    }
+    try:
+        session.execute(
+            text("SELECT pg_notify('ring_events', :payload)"),
+            {"payload": json.dumps(payload)},
+        )
+    except Exception:
+        pass  # pg_notify failure must not block event recording
+
+    session.commit()
+    log.debug("Event recorded: %s at %s", event_type, camera_name)
+    return event
+
+
+def get_recent_events(
+    session: Session,
+    limit: int = 50,
+    offset: int = 0,
+    camera: str | None = None,
+    event_type: str | None = None,
+    from_dt: datetime | None = None,
+    to_dt: datetime | None = None,
+) -> tuple[list[Event], int]:
+    """Return (events, total_count) with optional filters."""
+    q = session.query(Event)
+    if camera:
+        q = q.filter(Event.camera_name == camera)
+    if event_type:
+        q = q.filter(Event.event_type == event_type)
+    if from_dt:
+        q = q.filter(Event.occurred_at >= from_dt)
+    if to_dt:
+        q = q.filter(Event.occurred_at <= to_dt)
+    total = q.count()
+    items = q.order_by(Event.occurred_at.desc()).offset(offset).limit(limit).all()
+    return items, total
