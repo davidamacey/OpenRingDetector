@@ -18,6 +18,10 @@ env/
 # Environment and secrets
 .env
 tokens/
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Model weights
 models/*.pt

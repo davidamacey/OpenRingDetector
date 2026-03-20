@@ -1,10 +1,10 @@
-# CLAUDE.md
+# CLAUDE.md — OpenRingDetector
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-Self-hosted AI replacement for Ring's paid detection features. Listens for Ring motion events via Firebase push, runs YOLOv8 detection + optional Gemma 3 captioning on GPU, matches vehicles against saved references, tracks arrivals/departures, and sends push notifications (with snapshot images) via ntfy.
+**OpenRingDetector** — self-hosted AI replacement for Ring's paid detection features. Listens for Ring motion events via Firebase push, runs YOLOv8 detection + optional Gemma 3 captioning on GPU, matches vehicles against saved references, tracks arrivals/departures, and sends push notifications (with snapshot images) via ntfy.
 
 ## Setup
 

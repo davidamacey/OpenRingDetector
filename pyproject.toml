@@ -3,9 +3,10 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ring-detector"
+name = "open-ring-detector"
 version = "2.0.0"
-description = "Ring doorbell motion detection, vehicle/person recognition, and custom notifications"
+description = "Open-source Ring doorbell AI detection: vehicle recognition, face detection, smart notifications"
+license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.12"
 dependencies = [
     # Ring API (async since 0.8+)
