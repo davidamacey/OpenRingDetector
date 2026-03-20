@@ -21,10 +21,11 @@ dependencies = [
     "opencv-python-headless>=4.10",
     "Pillow>=10.4",
 
-    # Database (PostgreSQL + pgvector)
+    # Database (PostgreSQL + pgvector + migrations)
     "sqlalchemy>=2.0.40",
     "psycopg2-binary>=2.9",
     "pgvector>=0.4",
+    "alembic>=1.13",
 
     # Notifications
     "requests>=2.32",

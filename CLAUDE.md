@@ -14,7 +14,7 @@ pip install -e ".[dev]"
 cp .env.example .env
 bash scripts/download_model.sh          # YOLO11m weights
 bash scripts/download_face_models.sh    # SCRFD-10G + ArcFace w600k_r50 ONNX models
-docker compose up -d
+docker compose up -d                    # Start PostgreSQL (schema applied automatically)
 ```
 
 ## Commands
@@ -65,7 +65,7 @@ pytest -v
 | `watcher.py` | Main async event loop |
 | `cli.py` | All CLI commands |
 
-### Database (PostgreSQL 17 + pgvector)
+### Database (PostgreSQL 17 + pgvector + Alembic)
 
 `metadata`, `detections`, `embeddings` (512-dim CLIP), `face_embeddings` (512-dim ArcFace), `references`, `face_profiles`, `visit_events`
 
@@ -88,6 +88,20 @@ pytest -v
 
 All inference runs locally via `onnxruntime-gpu` (GPU) or `onnxruntime` (CPU fallback).
 Download models once: `bash scripts/download_face_models.sh`
+
+Migrations live in `alembic/versions/`. They run automatically on every app startup via `run_migrations()` in `database.py`.
+
+```bash
+# Manual migration commands (run from project root with venv active)
+alembic upgrade head                               # Apply pending migrations
+alembic downgrade -1                               # Roll back one migration
+alembic revision --autogenerate -m "description"  # Generate migration from model changes
+alembic current                                    # Show current schema revision
+alembic history                                    # Show all migrations
+
+# Existing DB bootstrapped before Alembic was introduced — stamp it first:
+alembic stamp 001
+```
 
 ### Key Constraints
 

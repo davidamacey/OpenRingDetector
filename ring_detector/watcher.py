@@ -17,7 +17,6 @@ from ring_detector import ring_api
 from ring_detector.captioner import caption_image
 from ring_detector.config import settings
 from ring_detector.database import (
-    create_tables,
     extend_visit,
     get_active_visit_by_reference,
     get_active_visits,
@@ -27,6 +26,7 @@ from ring_detector.database import (
     match_against_references,
     record_arrival,
     record_departure,
+    run_migrations,
     store_watcher_face_embedding,
 )
 from ring_detector.detector import (
@@ -66,7 +66,7 @@ class RingWatcher:
     async def startup(self) -> None:
         log.info("Starting Ring Watcher...")
 
-        create_tables()
+        run_migrations()
         self.session = get_session()
         self.models = load_models()
         self.ring = await ring_api.authenticate()

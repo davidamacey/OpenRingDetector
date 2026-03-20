@@ -20,7 +20,6 @@ from sqlalchemy import (
     Integer,
     String,
     create_engine,
-    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
@@ -146,13 +145,17 @@ def get_session() -> Session:
     return _SessionFactory()
 
 
-def create_tables() -> None:
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    Base.metadata.create_all(engine)
-    log.info("Database tables ready (pgvector enabled)")
+def run_migrations() -> None:
+    """Run all pending Alembic migrations to bring the schema to head."""
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+
+    ini_path = Path(__file__).parent.parent / "alembic.ini"
+    cfg = Config(str(ini_path))
+    command.upgrade(cfg, "head")
+    log.info("Database schema up to date")
 
 
 # --- Bulk Inserts ---

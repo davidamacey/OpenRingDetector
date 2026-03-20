@@ -15,7 +15,6 @@ from tqdm import tqdm
 from ring_detector.config import settings
 from ring_detector.database import (
     VisitEvent,
-    create_tables,
     delete_face_profile,
     find_similar_embeddings,
     get_all_face_profiles,
@@ -23,6 +22,7 @@ from ring_detector.database import (
     get_session,
     insert_embeddings_bulk,
     insert_metadata_bulk,
+    run_migrations,
     upsert_face_profile,
     upsert_reference,
 )
@@ -53,7 +53,7 @@ def embed_main():
     args = parser.parse_args()
     _setup_logging()
 
-    create_tables()
+    run_migrations()
     session = get_session()
     models = load_models()
 
@@ -102,7 +102,7 @@ def ref_main():
 
     display_name = args.display_name or args.name.replace("_", " ").title()
 
-    create_tables()
+    run_migrations()
     session = get_session()
     models = load_models()
 
@@ -151,7 +151,7 @@ def visits_main():
     parser.add_argument("--name", type=str, default=None)
     args = parser.parse_args()
 
-    create_tables()
+    run_migrations()
     session = get_session()
 
     query = session.query(VisitEvent).order_by(VisitEvent.arrived_at.desc())
@@ -184,7 +184,7 @@ def visits_main():
 
 def refs_main():
     """List all configured references."""
-    create_tables()
+    run_migrations()
     session = get_session()
     refs = get_all_references(session)
 
@@ -207,7 +207,7 @@ def status_main():
 
     # Database
     try:
-        create_tables()
+        run_migrations()
         session = get_session()
         session.execute(__import__("sqlalchemy").text("SELECT 1"))
         refs = get_all_references(session)
@@ -316,7 +316,7 @@ def _face_add(args) -> None:
         log.error("Cannot read image: %s", args.image)
         return
 
-    create_tables()
+    run_migrations()
     session = get_session()
     models = load_models()
 
@@ -346,7 +346,7 @@ def _face_add(args) -> None:
 
 
 def _face_list() -> None:
-    create_tables()
+    run_migrations()
     session = get_session()
     profiles = get_all_face_profiles(session)
 
@@ -363,7 +363,7 @@ def _face_list() -> None:
 
 
 def _face_delete(args) -> None:
-    create_tables()
+    run_migrations()
     session = get_session()
     if delete_face_profile(session, args.name):
         log.info("Face profile '%s' deleted", args.name)
