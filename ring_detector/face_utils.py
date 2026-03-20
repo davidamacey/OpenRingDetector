@@ -34,7 +34,7 @@ ARCFACE_INPUT_NAME = "input"
 
 # Maps stride → (score_name, bbox_name, kps_name) in the ONNX model
 _STRIDE_MAP: dict[int, tuple[str, str, str]] = {
-    8:  ("448", "451", "454"),
+    8: ("448", "451", "454"),
     16: ("471", "474", "477"),
     32: ("494", "497", "500"),
 }
@@ -181,9 +181,9 @@ def decode_scrfd_outputs(
 
     for stride in FPN_STRIDES:
         score_name, bbox_name, kps_name = _STRIDE_MAP[stride]
-        scores_raw = net_outs[score_name]    # [N, 1] or [B, N, 1]
-        bbox_preds = net_outs[bbox_name]     # [N, 4]
-        kps_preds = net_outs[kps_name]       # [N, 10]
+        scores_raw = net_outs[score_name]  # [N, 1] or [B, N, 1]
+        bbox_preds = net_outs[bbox_name]  # [N, 4]
+        kps_preds = net_outs[kps_name]  # [N, 10]
 
         # Strip batch dim if present (e.g. [1, N, 1] → [N, 1])
         if scores_raw.ndim == 3:
@@ -323,7 +323,7 @@ def preprocess_for_arcface(aligned_bgr: np.ndarray) -> np.ndarray:
     """
     if len(aligned_bgr) == 0:
         return np.zeros((0, 3, ARCFACE_SIZE, ARCFACE_SIZE), dtype=np.float32)
-    rgb = aligned_bgr[:, :, :, ::-1].copy()             # BGR → RGB
+    rgb = aligned_bgr[:, :, :, ::-1].copy()  # BGR → RGB
     chw = rgb.transpose(0, 3, 1, 2).astype(np.float32)  # NHWC → NCHW
     return (chw - 127.5) / 128.0
 

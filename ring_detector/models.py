@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 @dataclass
 class LoadedModels:
     detect_model: YOLO
-    clip_model: torch.nn.Module       # CLIP ViT-B/32 visual encoder
-    clip_preprocess: object           # torchvision transform for CLIP input
+    clip_model: torch.nn.Module  # CLIP ViT-B/32 visual encoder
+    clip_preprocess: object  # torchvision transform for CLIP input
     face_detector: FaceDetector | None  # LocalFaceDetector, TritonFaceDetector, or None
     device: torch.device
 

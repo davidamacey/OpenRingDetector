@@ -15,7 +15,6 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from ring_detector.config import Settings  # noqa: E402
 from ring_detector.database import (  # noqa: E402
     Base,
-    FaceProfile,
     delete_face_profile,
     get_all_face_profiles,
     match_against_face_profiles,

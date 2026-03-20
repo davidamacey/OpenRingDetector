@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     create_engine,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
@@ -27,8 +28,8 @@ from ring_detector.config import settings
 
 log = logging.getLogger(__name__)
 
-CLIP_EMBED_DIM = 512   # CLIP ViT-B/32 visual encoder output
-FACE_EMBED_DIM = 512   # ArcFace r100 output (InsightFace buffalo_l)
+CLIP_EMBED_DIM = 512  # CLIP ViT-B/32 visual encoder output
+FACE_EMBED_DIM = 512  # ArcFace r100 output (InsightFace buffalo_l)
 
 
 class Base(DeclarativeBase):
@@ -169,8 +170,9 @@ def run_migrations() -> None:
     """Run all pending Alembic migrations to bring the schema to head."""
     from pathlib import Path
 
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     ini_path = Path(__file__).parent.parent / "alembic.ini"
     cfg = Config(str(ini_path))

@@ -29,11 +29,11 @@ log = logging.getLogger(__name__)
 class FaceResult:
     """Single detected face with box, landmarks, aligned crop, and 512-dim embedding."""
 
-    box: np.ndarray           # [4] xyxy in pixel coords
-    score: float              # Detection confidence [0, 1]
-    landmarks: np.ndarray     # [5, 2] five-point landmarks in pixel coords
+    box: np.ndarray  # [4] xyxy in pixel coords
+    score: float  # Detection confidence [0, 1]
+    landmarks: np.ndarray  # [5, 2] five-point landmarks in pixel coords
     aligned_crop: np.ndarray  # [112, 112, 3] BGR uint8, Umeyama-aligned
-    embedding: list[float]    # 512-dim ArcFace L2-normalized embedding
+    embedding: list[float]  # 512-dim ArcFace L2-normalized embedding
 
 
 class FaceDetector(ABC):
@@ -63,7 +63,7 @@ class LocalFaceDetector(FaceDetector):
     """SCRFD-10G + ArcFace w600k_r50 running locally via ONNX Runtime."""
 
     def __init__(self, detector_session, recognizer_session) -> None:
-        self._detector = detector_session    # ort.InferenceSession for SCRFD
+        self._detector = detector_session  # ort.InferenceSession for SCRFD
         self._recognizer = recognizer_session  # ort.InferenceSession for ArcFace
 
     def detect_and_embed(
@@ -74,9 +74,9 @@ class LocalFaceDetector(FaceDetector):
     ) -> list[FaceResult]:
         try:
             from ring_detector.face_utils import (
+                _STRIDE_MAP,
                 INPUT_SIZE,
                 SCRFD_INPUT_NAME,
-                _STRIDE_MAP,
                 align_faces_batch,
                 decode_scrfd_outputs,
                 preprocess_scrfd,
@@ -302,7 +302,5 @@ def _create_triton_detector(cfg) -> FaceDetector | None:
         log.info("Triton face API reachable at %s", http_url)
         return TritonFaceDetector(http_url)
     except Exception as exc:
-        log.warning(
-            "Triton face API unreachable (%s) — falling back to local mode", exc
-        )
+        log.warning("Triton face API unreachable (%s) — falling back to local mode", exc)
         return _create_local_detector(cfg)

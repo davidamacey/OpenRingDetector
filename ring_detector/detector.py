@@ -178,7 +178,7 @@ def detect_faces(
     image_paths: list[str],
     resized_images: list[np.ndarray],  # kept for API compatibility (unused)
     uuid_list: list[str],
-    batch_size: int = 25,              # kept for API compatibility (unused)
+    batch_size: int = 25,  # kept for API compatibility (unused)
 ) -> tuple[list[np.ndarray], list[list[float]], pd.DataFrame]:
     """Detect faces in a batch of images.
 
