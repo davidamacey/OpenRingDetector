@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-ring-detector"
-version = "2.0.0"
+version = "2.1.0"
 description = "Open-source Ring doorbell AI detection: vehicle recognition, face detection, smart notifications"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.12"
@@ -12,13 +12,15 @@ dependencies = [
     # Ring API (async since 0.8+)
     "ring-doorbell>=0.9.14",
 
-    # ML / Detection — pinned to facenet-pytorch compatibility window
-    "ultralytics>=8.3",
-    "torch>=2.2,<2.3",
-    "torchvision>=0.17,<0.18",
-    "facenet-pytorch>=2.6",
-    "opencv-python-headless>=4.9",
-    "Pillow>=10.2,<10.3",
+    # ML / Detection
+    "ultralytics>=8.3",          # YOLO11 support (8.3+ required)
+    "torch>=2.5",                # No longer pinned — facenet-pytorch removed
+    "torchvision>=0.20",
+    "open-clip-torch>=2.26",     # CLIP ViT-B/32 for vehicle embeddings (512-dim)
+    "insightface>=0.7",          # SCRFD + ArcFace r100 for face detection (512-dim)
+    "onnxruntime-gpu>=1.19",     # InsightFace ONNX backend
+    "opencv-python-headless>=4.10",
+    "Pillow>=10.4",
 
     # Database (PostgreSQL + pgvector)
     "sqlalchemy>=2.0.40",

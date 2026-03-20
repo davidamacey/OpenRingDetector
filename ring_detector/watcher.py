@@ -29,7 +29,7 @@ from ring_detector.database import (
 )
 from ring_detector.detector import (
     clear_gpu_memory,
-    compute_yolo_embeddings,
+    compute_clip_embeddings,
     run_detection,
 )
 from ring_detector.image_utils import pad_to_square, prepare_batch
@@ -67,10 +67,8 @@ class RingWatcher:
         self.models = load_models()
         self.ring = await ring_api.authenticate()
 
-        devices = self.ring.devices()
-        for dtype in ("doorbells", "stickup_cams", "other"):
-            for dev in devices.get(dtype, []):
-                log.info("  Camera: %s (%s)", dev.name, dtype)
+        for dev in self.ring.video_devices():
+            log.info("  Camera: %s", dev.name)
 
         refs = get_all_references(self.session)
         log.info("References: %d loaded", len(refs))
@@ -199,7 +197,7 @@ class RingWatcher:
             crops = [img_crops[i] for i in indices if i < len(img_crops)]
             if crops:
                 padded_crops = [pad_to_square(c) for c in crops]
-                embeddings = compute_yolo_embeddings(self.models, padded_crops)
+                embeddings = compute_clip_embeddings(self.models, padded_crops)
                 matches = match_against_references(self.session, embeddings)
                 seen = set()
                 for m in matches:
@@ -232,10 +230,22 @@ class RingWatcher:
 
     # --- Background Tasks ---
 
+    async def _wait_or_shutdown(self, seconds: float) -> bool:
+        """Sleep for `seconds`, waking early if shutdown is requested.
+
+        Returns True if shutdown was triggered, False if sleep completed normally.
+        """
+        try:
+            await asyncio.wait_for(self._shutdown.wait(), timeout=seconds)
+            return True
+        except TimeoutError:
+            return False
+
     async def _check_departures(self) -> None:
         timeout = settings.ring.departure_timeout
         while not self._shutdown.is_set():
-            await asyncio.sleep(60)
+            if await self._wait_or_shutdown(60):
+                break
             try:
                 now = datetime.now()
                 for v in get_active_visits(self.session):
@@ -248,7 +258,8 @@ class RingWatcher:
 
     async def _refresh_ring_session(self) -> None:
         while not self._shutdown.is_set():
-            await asyncio.sleep(3600)
+            if await self._wait_or_shutdown(3600):
+                break
             try:
                 await self.ring.async_update_data()
             except Exception:
@@ -264,7 +275,9 @@ class RingWatcher:
 
     async def run(self) -> None:
         await self.startup()
-        await self.listener.start(timeout=10)
+        started = await self.listener.start(timeout=10)
+        if not started:
+            raise RuntimeError("Firebase listener failed to start (FCM registration failed)")
         log.info("Listening for events (Firebase push)")
 
         tasks = [

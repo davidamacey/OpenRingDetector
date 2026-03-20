@@ -28,8 +28,8 @@ from ring_detector.config import settings
 
 log = logging.getLogger(__name__)
 
-YOLO_EMBED_DIM = 576
-FACE_EMBED_DIM = 512
+CLIP_EMBED_DIM = 512   # CLIP ViT-B/32 visual encoder output
+FACE_EMBED_DIM = 512   # ArcFace r100 output (InsightFace buffalo_l)
 
 
 class Base(DeclarativeBase):
@@ -73,7 +73,7 @@ class Embedding(Base):
     file_uuid = Column(String, ForeignKey("metadata.file_uuid", ondelete="CASCADE"))
     embed_type = Column(String)  # full_image, detection, reference
     label = Column(String, default="none")
-    vector = Column(Vector(YOLO_EMBED_DIM))
+    vector = Column(Vector(CLIP_EMBED_DIM))
 
     file_metadata = relationship("Metadata", back_populates="embeddings")
 
@@ -96,7 +96,7 @@ class Reference(Base):
     name = Column(String, unique=True)
     display_name = Column(String)
     category = Column(String, default="vehicle")
-    vector = Column(Vector(YOLO_EMBED_DIM))
+    vector = Column(Vector(CLIP_EMBED_DIM))
 
 
 class VisitEvent(Base):

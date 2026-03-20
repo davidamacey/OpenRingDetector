@@ -25,7 +25,7 @@ from ring_detector.database import (
 )
 from ring_detector.detector import (
     chunk,
-    compute_yolo_embeddings,
+    compute_clip_embeddings,
     process_batch,
 )
 from ring_detector.image_utils import get_files, prepare_batch
@@ -106,7 +106,7 @@ def ref_main():
     log.info("Found %d reference images", len(image_files))
 
     paths, resized, padded = prepare_batch(image_files)
-    embeddings = compute_yolo_embeddings(models, padded)
+    embeddings = compute_clip_embeddings(models, padded)
     mean_vec = np.mean(embeddings, axis=0).tolist()
 
     upsert_reference(session, args.name, display_name, mean_vec, args.category)

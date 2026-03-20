@@ -1,7 +1,7 @@
 services:
   db:
     container_name: ring-db
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg17
     restart: always
     env_file: .env
     environment:

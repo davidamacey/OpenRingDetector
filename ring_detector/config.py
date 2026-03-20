@@ -62,7 +62,7 @@ class NotifyConfig:
 
 @dataclass
 class ModelConfig:
-    yolo_model_path: str = os.getenv("YOLO_MODEL_PATH", "./models/yolov8m.pt")
+    yolo_model_path: str = os.getenv("YOLO_MODEL_PATH", "./models/yolo11m.pt")
     device: str = os.getenv("TORCH_DEVICE", "cuda:0")
     image_size: int = 640
     batch_size: int = int(os.getenv("BATCH_SIZE", "50"))

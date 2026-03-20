@@ -5,7 +5,7 @@
 
 Open-source, self-hosted AI replacement for Ring's paid detection features. Runs entirely on your own hardware — no Ring subscription required for AI features.
 
-OpenRingDetector listens for Ring camera motion events via Firebase push, downloads snapshots, runs local YOLOv8 object detection on GPU, matches vehicles against saved references, recognises known faces, tracks arrivals and departures, and sends push notifications via [ntfy](https://ntfy.sh).
+OpenRingDetector listens for Ring camera motion events via Firebase push, downloads snapshots, runs local YOLO11 object detection on GPU, matches vehicles against saved references, recognises known faces, tracks arrivals and departures, and sends push notifications via [ntfy](https://ntfy.sh).
 
 ## Features
 
@@ -17,8 +17,9 @@ OpenRingDetector listens for Ring camera motion events via Firebase push, downlo
 - **Smart notifications** — snapshot images attached, detection summary included
 - **Visit logging** — all visits stored in PostgreSQL with timestamps
 - **Scene captioning** — optional Gemma 3 4B via Ollama for natural-language descriptions
-- **Vector similarity search** — pgvector in PostgreSQL (no separate vector DB)
-- **GPU accelerated** — YOLOv8 + ArcFace on NVIDIA GPU via CUDA
+- **Automatic archiving** — videos and snapshots saved to NAS by date
+- **Vector similarity search** — pgvector in PostgreSQL 17 (no separate vector DB)
+- **GPU accelerated** — YOLO11 detection + CLIP embeddings on NVIDIA GPU via CUDA
 
 ## Architecture
 
@@ -27,25 +28,21 @@ Ring Camera
     |  Firebase push (motion event)
     v
 Download snapshot + archive video to NAS
-    |
-    v
-YOLOv8 Detection  -->  Identify objects (cars, trucks, people)
-    |
-    v
-Crop vehicles  -->  576-dim embeddings (YOLOv8 backbone)
-    |
-    v
-pgvector cosine similarity against saved references
-    |
-  Match?
-  YES --> record_arrival() + notify "Cleaner arrived!" + snapshot
-          extend_visit() on subsequent motion
-          After DEPARTURE_TIMEOUT --> "Cleaner left. Time to pay!"
-  NO  --> "Unknown visitor" or generic motion alert
+    ↓
+YOLO11 Detection → Identify objects (cars, trucks, people)
+    ↓
+Crop vehicles → Compute embeddings (512-dim, CLIP ViT-B/32)
+    ↓
+Compare against references → pgvector cosine similarity
+    ↓
+Match found?
+  YES → Record arrival, notify "Cleaner arrived!" + snapshot
+        Track visit, on departure → "Time to pay!"
+  NO  → "Unknown visitor" or "Motion detected: car, person"
 
-Face crops  -->  ArcFace 512-dim embeddings  -->  match face_profiles
-  Known  --> "David arrived at Front Door"
-  Unknown --> snapshot notification
+Face crops → ArcFace 512-dim embeddings → match face_profiles
+  Known  → "David arrived at Front Door"
+  Unknown → snapshot notification
 ```
 
 ## Quick Start
@@ -53,8 +50,8 @@ Face crops  -->  ArcFace 512-dim embeddings  -->  match face_profiles
 ### Prerequisites
 
 - Python 3.12+
-- NVIDIA GPU with CUDA
-- Docker (for PostgreSQL + pgvector)
+- NVIDIA GPU with CUDA support
+- Docker (for PostgreSQL 17 with pgvector)
 - A Ring doorbell or floodlight camera
 
 ### Install
@@ -70,20 +67,25 @@ cp .env.example .env
 # Edit .env: set DB_PASSWORD, RING_CAMERA_NAME, NTFY_URL
 ```
 
+### Download Model Weights
+
+```bash
+# YOLO11m detection weights
+bash scripts/download_model.sh
+
+# Face detection + recognition models (SCRFD + ArcFace ONNX)
+bash scripts/download_face_models.sh
+```
+
 ### Start Infrastructure
 
 ```bash
 docker compose up -d
 ```
 
-### Download Model Weights
+This starts PostgreSQL 17 (with pgvector).
 
-```bash
-bash scripts/download_model.sh          # YOLOv8m weights
-bash scripts/download_face_models.sh    # SCRFD + ArcFace ONNX models
-```
-
-### Authenticate with Ring
+### Ring Authentication
 
 ```bash
 # First-time auth (requires 2FA code from Ring app)
@@ -126,6 +128,26 @@ ring-watch
 | `ring-visits` | View visit history (`--active`, `--name NAME`, `--limit N`) |
 | `ring-status` | Health check: DB, GPU, models, Ring token, Ollama, archive |
 
+## How It Works
+
+1. **Push Event**: Ring camera detects motion → Firebase delivers event in seconds
+2. **Snapshot**: Downloads camera snapshot + archives video to NAS
+3. **Detection**: YOLO11 identifies objects (cars, trucks, people, etc.)
+4. **Embedding**: Vehicle crops → 512-dim feature vectors via CLIP ViT-B/32
+5. **Matching**: Vectors compared against references via pgvector cosine similarity
+6. **Arrival**: Match found → record visit, send "Cleaner arrived!" notification
+7. **Tracking**: Subsequent motion extends the visit timer
+8. **Departure**: No motion for 5 min (configurable) → "Cleaner left after ~45 min. Time to pay!"
+
+## Model Stack
+
+| Component | Model | Notes |
+|-----------|-------|-------|
+| Object detection | YOLO11m | Cars, trucks, people — COCO 80 classes |
+| Vehicle embedding | CLIP ViT-B/32 (OpenAI) | 512-dim, cosine similarity |
+| Face detection | SCRFD-10GF (InsightFace) | 5-point landmarks |
+| Face embedding | ArcFace r100 (InsightFace) | 512-dim, 99.6% LFW accuracy |
+
 ## Configuration
 
 All settings are read from `.env` (copy from `.env.example`):
@@ -140,7 +162,7 @@ All settings are read from `.env` (copy from `.env.example`):
 | `ARCHIVE_DIR` | `/mnt/nas/ring_archive` | Video/snapshot archive path |
 | `NTFY_URL` | | ntfy topic URL |
 | `TORCH_DEVICE` | `cuda:0` | GPU device for inference |
-| `YOLO_MODEL_PATH` | `./models/yolov8m.pt` | YOLOv8 weights |
+| `YOLO_MODEL_PATH` | `./models/yolo11m.pt` | Path to YOLO weights |
 | `ENABLE_FACE_DETECTION` | `true` | Enable SCRFD + ArcFace pipeline |
 | `FACE_MATCH_THRESHOLD` | `0.6` | Cosine similarity threshold for face match |
 | `CAPTIONER_ENABLED` | `false` | Enable Gemma 3 4B scene captioning |
@@ -152,41 +174,50 @@ All settings are read from `.env` (copy from `.env.example`):
 
 ```
 ring_detector/          # Python package (internal name kept for compatibility)
+├── __init__.py         # Package version
 ├── config.py           # All settings from .env
 ├── ring_api.py         # Ring auth + Firebase push event listener
-├── models.py           # ML model loading (YOLO, SCRFD, ArcFace)
+├── models.py           # ML model loading (YOLO11, CLIP, InsightFace)
 ├── detector.py         # Detection + embedding pipeline
+├── face_detector.py    # FaceDetector ABC (local ONNX + Triton backends)
 ├── face_utils.py       # SCRFD decoder, Umeyama alignment, ArcFace preprocessing
 ├── captioner.py        # Gemma 3 4B via Ollama (optional)
 ├── image_utils.py      # Image I/O, resize, pad
-├── database.py         # PostgreSQL + pgvector (all tables)
+├── database.py         # PostgreSQL 17 + pgvector (all tables)
 ├── notifications.py    # ntfy push notifications
 ├── watcher.py          # Main async event loop
 └── cli.py              # CLI entry points
 
 scripts/
-├── download_model.sh         # YOLOv8m weights
+├── download_model.sh         # YOLO11m weights
 └── download_face_models.sh   # SCRFD + ArcFace ONNX models
 
-db-init-scripts/
-└── initdb.sql          # pgvector extension + schema
-
-docker-compose.yml      # PostgreSQL + pgvector container
+docker-compose.yml      # PostgreSQL 17 + pgvector container
 ```
 
 ## Database
 
-PostgreSQL 16 + pgvector. Single container (`pgvector/pgvector:pg16`), port 5433.
+PostgreSQL 17 + pgvector. Single container (`pgvector/pgvector:pg17`), port 5433.
 
 | Table | Contents |
 |-------|----------|
 | `metadata` | Raw event metadata |
 | `detections` | Per-frame detection results |
-| `embeddings` | 576-dim YOLOv8 vehicle embeddings |
+| `embeddings` | 512-dim CLIP vehicle embeddings |
 | `references` | Saved vehicle reference embeddings |
 | `face_embeddings` | 512-dim ArcFace embeddings per detection |
 | `face_profiles` | Saved face references per known person |
 | `visit_events` | Arrival/departure log with timestamps |
+
+### Database Migration Note
+
+If upgrading from `v2.0.x`, the vehicle embedding dimension changed from 576-dim (YOLO backbone) to 512-dim (CLIP ViT-B/32). You must recreate the database:
+
+```bash
+docker compose down -v   # ⚠ drops all data
+docker compose up -d
+ring-ref ./photos/... --name ... --display-name "..."  # rebuild references
+```
 
 ## Development
 
@@ -199,4 +230,4 @@ pytest -v
 
 OpenRingDetector is released under the [GNU Affero General Public License v3.0](LICENSE).
 
-This project uses [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) which is licensed under AGPL-3.0. Use of this project in a commercial product requires a separate Ultralytics commercial license.
+This project uses [Ultralytics YOLO11](https://github.com/ultralytics/ultralytics) which is licensed under AGPL-3.0. Use of this project in a commercial product requires a separate Ultralytics commercial license.

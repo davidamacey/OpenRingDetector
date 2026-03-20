@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from gc import collect
-from math import ceil
 from uuid import uuid4
 
 import cv2
@@ -14,22 +12,12 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from tqdm import tqdm
+from PIL import Image
 
 from ring_detector.image_utils import pad_to_square
 from ring_detector.models import LoadedModels
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class ImageData:
-    img_file_path: str
-    img_face_box: np.ndarray
-    img_uuid_org: str
-    img_face_prob: float
-    img_org_shape: tuple
-    img_resized_shape: tuple
 
 
 def clear_gpu_memory() -> None:
@@ -123,160 +111,85 @@ def run_detection(
     return df_meta, df_dets, img_crops
 
 
-# --- Embeddings ---
+# --- CLIP Embeddings (vehicle matching) ---
 
 
-def compute_yolo_embeddings(
+def compute_clip_embeddings(
     models: LoadedModels,
     images: list[np.ndarray],
 ) -> list[list[float]]:
-    """Compute L2-normalized embeddings from YOLO backbone."""
+    """Compute L2-normalized 512-dim CLIP ViT-B/32 embeddings from BGR images.
+
+    Replaces the old YOLO-backbone approach with a proper image-text encoder.
+    Suitable for vehicle similarity matching via pgvector cosine distance.
+    """
     if not images:
         return []
 
-    # Normalize and stack
     tensors = []
-    for img in images:
-        if img.max() > 1:
-            t = torch.tensor(img / 255.0, dtype=torch.float32)
-        else:
-            t = torch.tensor(img, dtype=torch.float32)
-        tensors.append(t)
+    for img_bgr in images:
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+        tensors.append(models.clip_preprocess(pil_img))
 
     batch = torch.stack(tensors).to(models.device)
-    batch = batch.permute(0, 3, 1, 2)  # BHWC → BCHW
-
     with torch.no_grad():
-        out = models.embed_model.model(batch)
+        features = models.clip_model.encode_image(batch)
 
-    batch_size, num_ch, _, _ = out.shape
-    reshaped = out.view(batch_size, num_ch, -1)
-    mean_vals = reshaped.mean(dim=2)
-    normed = F.normalize(mean_vals, p=2, dim=1)
-    return normed.tolist()
+    normed = F.normalize(features.float(), p=2, dim=1)
+    return normed.cpu().tolist()
 
 
-def compute_face_embeddings(
-    models: LoadedModels,
-    face_crops: list[torch.Tensor],
-) -> list[list[float]]:
-    """Compute L2-normalized face embeddings from InceptionResnetV1."""
-    if not face_crops:
-        return []
-    batch = torch.stack(face_crops).to(models.device)
-    with torch.no_grad():
-        embeddings = models.face_resnet(batch)
-    normed = F.normalize(embeddings, p=2, dim=1)
-    return normed.tolist()
-
-
-# --- Face Detection ---
+# --- Face Detection + Embedding (InsightFace) ---
 
 
 def detect_faces(
     models: LoadedModels,
-    padded_images_bgr: list[np.ndarray],
+    images_bgr: list[np.ndarray],
     image_paths: list[str],
-    resized_images: list[np.ndarray],
     uuid_list: list[str],
-    batch_size: int = 25,
-) -> tuple[list[torch.Tensor], pd.DataFrame]:
-    """Detect faces in padded images. Returns (face_crops, face_detections_df).
+) -> tuple[list[list[float]], pd.DataFrame]:
+    """Detect faces and compute ArcFace embeddings via InsightFace (SCRFD + ArcFace r100).
 
-    Uses adaptive batch sizing to handle CUDA OOM errors.
+    Returns (embeddings, df_faces) where each embedding is a 512-dim ArcFace vector.
+    Replaces the old MTCNN + InceptionResnetV1 pipeline.
     """
-    # Convert BGR → RGB for MTCNN
-    rgb_images = [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in padded_images_bgr]
-
-    face_crops: list[torch.Tensor] = []
-    image_data_list: list[ImageData] = []
-    current_batch_size = batch_size
-
-    # Adaptive batch loop — reduces batch size on OOM
-    while current_batch_size > 0:
-        try:
-            num_batches = ceil(len(rgb_images) / current_batch_size)
-            for face_imgs, uuids, files, org_imgs in tqdm(
-                zip(
-                    chunk(rgb_images, current_batch_size),
-                    chunk(uuid_list, current_batch_size),
-                    chunk(image_paths, current_batch_size),
-                    chunk(resized_images, current_batch_size),
-                    strict=False,
-                ),
-                desc="Face detection",
-                total=num_batches,
-            ):
-                try:
-                    crops_batch, boxes_batch, probs_batch = models.face_mtcnn(
-                        face_imgs, return_prob=True
-                    )
-                    for idx, (faces, boxes, probs) in enumerate(
-                        zip(crops_batch, boxes_batch, probs_batch, strict=True)
-                    ):
-                        if isinstance(faces, torch.Tensor) and isinstance(boxes, np.ndarray):
-                            for crop, box, prob in zip(faces, boxes, probs, strict=True):
-                                face_crops.append(crop)
-                                image_data_list.append(
-                                    ImageData(
-                                        img_file_path=files[idx],
-                                        img_face_box=box,
-                                        img_uuid_org=uuids[idx],
-                                        img_face_prob=prob,
-                                        img_org_shape=org_imgs[idx].shape[:2],
-                                        img_resized_shape=face_imgs[idx].shape[:2],
-                                    )
-                                )
-                except (torch.cuda.OutOfMemoryError, RuntimeError):
-                    torch.cuda.empty_cache()
-                    collect()
-                    current_batch_size //= 2
-                    log.warning("CUDA OOM, reducing face batch size to %d", current_batch_size)
-                    break
-            else:
-                break  # Completed without OOM
-        except Exception:
-            log.exception("Face detection failed")
-            break
-
-    # Convert face coordinates to detection records
-    if not image_data_list:
+    if models.face_app is None:
         return [], pd.DataFrame()
 
+    face_embeddings: list[list[float]] = []
     records = []
-    for data in image_data_list:
-        orig_h, orig_w = data.img_org_shape
-        x1, y1, x2, y2 = data.img_face_box
-        eff_w = orig_w * (data.img_resized_shape[1] / max(data.img_org_shape))
-        eff_h = orig_h * (data.img_resized_shape[0] / max(data.img_org_shape))
 
-        x1_r = x1 / eff_w * orig_w
-        y1_r = y1 / eff_h * orig_h
-        x2_r = x2 / eff_w * orig_w
-        y2_r = y2 / eff_h * orig_h
+    for img_bgr, path, file_uuid in zip(images_bgr, image_paths, uuid_list, strict=True):
+        try:
+            faces = models.face_app.get(img_bgr)
+        except Exception:
+            log.warning("Face detection failed for %s", path, exc_info=True)
+            continue
 
-        w = x2_r - x1_r
-        h = y2_r - y1_r
-        xc = x1_r + w / 2
-        yc = y1_r + h / 2
+        h, w = img_bgr.shape[:2]
+        for face in faces:
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            bw = x2 - x1
+            bh = y2 - y1
+            records.append(
+                {
+                    "uuid": uuid4().hex,
+                    "path": path,
+                    "file_uuid": file_uuid,
+                    "class_name": "face",
+                    "class_id": None,
+                    "confidence": int(face.det_score * 100),
+                    "xcenter": max(0.0, (x1 + bw / 2) / w),
+                    "ycenter": max(0.0, (y1 + bh / 2) / h),
+                    "width": max(0.0, bw / w),
+                    "height": max(0.0, bh / h),
+                }
+            )
+            face_embeddings.append(face.normed_embedding.tolist())
 
-        records.append(
-            {
-                "uuid": uuid4().hex,
-                "path": data.img_file_path,
-                "file_uuid": data.img_uuid_org,
-                "class_name": "face",
-                "class_id": None,
-                "confidence": int(data.img_face_prob * 100),
-                "xcenter": max(0, xc / orig_w),
-                "ycenter": max(0, yc / orig_h),
-                "width": max(0, w / orig_w),
-                "height": max(0, h / orig_h),
-            }
-        )
-
-    df_faces = pd.DataFrame(records)
-    return face_crops, df_faces
+    df_faces = pd.DataFrame(records) if records else pd.DataFrame()
+    return face_embeddings, df_faces
 
 
 # --- Similarity Matching ---
@@ -319,18 +232,18 @@ def process_batch(
     log.info("Running object detection on %d images", len(image_paths))
     df_meta, df_dets, img_crops = run_detection(models, resized_images, image_paths)
 
-    # 2. Crop embeddings
+    # 2. Crop embeddings (CLIP)
     crop_embeddings = []
     if len(df_dets) > 0 and img_crops:
-        log.info("Computing crop embeddings for %d detections", len(img_crops))
+        log.info("Computing CLIP embeddings for %d detections", len(img_crops))
         padded_crops = [pad_to_square(c) for c in img_crops]
-        crop_embeddings = compute_yolo_embeddings(models, padded_crops)
+        crop_embeddings = compute_clip_embeddings(models, padded_crops)
         del padded_crops
         clear_gpu_memory()
 
-    # 3. Full image embeddings
-    log.info("Computing full image embeddings")
-    full_embeddings = compute_yolo_embeddings(models, padded_images)
+    # 3. Full image embeddings (CLIP)
+    log.info("Computing full image CLIP embeddings")
+    full_embeddings = compute_clip_embeddings(models, padded_images)
 
     # 4. Store everything in PostgreSQL
     if session is not None:
@@ -339,7 +252,6 @@ def process_batch(
         if len(df_dets) > 0:
             database.insert_detections_bulk(session, df_dets.to_dict("records"))
 
-        # Full image embeddings
         database.insert_embeddings_bulk(
             session,
             df_meta["file_uuid"].tolist(),
@@ -347,7 +259,6 @@ def process_batch(
             embed_type="full_image",
         )
 
-        # Crop embeddings
         if crop_embeddings:
             database.insert_embeddings_bulk(
                 session,
@@ -360,31 +271,22 @@ def process_batch(
     del full_embeddings, crop_embeddings
     clear_gpu_memory()
 
-    # 5. Face detection + embedding
+    # 5. Face detection + embedding (InsightFace)
     log.info("Running face detection")
     uuid_list = df_meta["file_uuid"].tolist()
-    face_crops, df_faces = detect_faces(
-        models, padded_images, image_paths, resized_images, uuid_list, batch_size
-    )
+    face_vectors, df_faces = detect_faces(models, padded_images, image_paths, uuid_list)
 
-    num_faces = 0
-    if face_crops:
-        log.info("Computing face embeddings for %d faces", len(face_crops))
-        face_vectors = compute_face_embeddings(models, face_crops)
-
-        if session is not None and len(df_faces) > 0:
-            db_faces = df_faces.drop(columns=["path"]).to_dict("records")
-            database.insert_detections_bulk(session, db_faces)
-
-            database.insert_face_embeddings_bulk(
-                session,
-                df_faces["file_uuid"].tolist(),
-                df_faces["path"].tolist(),
-                face_vectors,
-            )
-
-        num_faces = len(face_crops)
-        del face_crops, face_vectors
+    num_faces = len(face_vectors)
+    if face_vectors and session is not None and len(df_faces) > 0:
+        log.info("Storing %d face embeddings", num_faces)
+        db_faces = df_faces.drop(columns=["path"]).to_dict("records")
+        database.insert_detections_bulk(session, db_faces)
+        database.insert_face_embeddings_bulk(
+            session,
+            df_faces["file_uuid"].tolist(),
+            df_faces["path"].tolist(),
+            face_vectors,
+        )
         clear_gpu_memory()
 
     return {
