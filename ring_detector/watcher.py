@@ -119,6 +119,14 @@ class RingWatcher:
             return False
         return (datetime.now() - last).total_seconds() < settings.ring.cooldown_seconds
 
+    async def _wait_or_shutdown(self, seconds: float) -> bool:
+        """Sleep for `seconds` or until shutdown. Returns True if shutdown was requested."""
+        try:
+            await asyncio.wait_for(asyncio.shield(self._shutdown.wait()), timeout=seconds)
+            return True
+        except TimeoutError:
+            return False
+
     @staticmethod
     def _detection_summary(df_dets) -> str:
         if len(df_dets) == 0:
@@ -332,6 +340,19 @@ class RingWatcher:
             except Exception:
                 log.exception("Failed to refresh Ring session")
 
+    async def _monitor_listener(self) -> None:
+        """Restart the Firebase listener if it drops (network hiccup, etc.)."""
+        while not self._shutdown.is_set():
+            if await self._wait_or_shutdown(300):
+                break
+            if self.listener and not self.listener.started:
+                log.warning("Event listener not active — attempting restart")
+                try:
+                    await self.listener.start(timeout=10)
+                    log.info("Event listener restarted")
+                except Exception:
+                    log.exception("Failed to restart event listener")
+
     async def _archive_video(self, camera_name: str | None = None) -> None:
         try:
             await ring_api.download_latest_video(self.ring, camera_name)
@@ -344,19 +365,28 @@ class RingWatcher:
         await self.startup()
         started = await self.listener.start(timeout=10)
         if not started:
-            raise RuntimeError("Firebase listener failed to start (FCM registration failed)")
+            raise RuntimeError(
+                "Failed to start Ring event listener (FCM registration failed). "
+                "Check your Ring token and network connection."
+            )
         log.info("Listening for events (Firebase push)")
 
         tasks = [
             asyncio.create_task(self._process_events(), name="events"),
             asyncio.create_task(self._check_departures(), name="departures"),
             asyncio.create_task(self._refresh_ring_session(), name="refresh"),
+            asyncio.create_task(self._monitor_listener(), name="monitor"),
         ]
         try:
             await asyncio.gather(*tasks)
         finally:
             self._shutdown.set()
-            await self.listener.stop()
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if self.listener:
+                await self.listener.stop()
             log.info("Ring Watcher stopped")
 
 

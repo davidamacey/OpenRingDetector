@@ -112,18 +112,19 @@ def create_event_listener(
 
 def get_camera(ring: Ring, camera_name: str | None = None):
     """Get a specific camera by name, or the first available one."""
-    devices = ring.devices()
     camera_name = camera_name or settings.ring.camera_name
 
-    for device_type in ("doorbells", "stickup_cams", "other"):
-        for device in devices.get(device_type, []):
-            if not camera_name or device.name == camera_name:
-                return device
+    if camera_name:
+        device = ring.get_video_device_by_name(camera_name)
+        if device:
+            return device
+        available = [d.name for d in ring.video_devices()]
+        raise ValueError(f"Camera '{camera_name}' not found. Available: {available}")
 
-    available = []
-    for device_type in ("doorbells", "stickup_cams", "other"):
-        available.extend(d.name for d in devices.get(device_type, []))
-    raise ValueError(f"Camera '{camera_name}' not found. Available: {available}")
+    video_devs = ring.video_devices()
+    if video_devs:
+        return video_devs[0]
+    raise ValueError("No cameras found in Ring account")
 
 
 # --- Video / Snapshot Download ---
