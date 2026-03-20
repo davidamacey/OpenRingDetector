@@ -140,56 +140,116 @@ def compute_clip_embeddings(
     return normed.cpu().tolist()
 
 
-# --- Face Detection + Embedding (InsightFace) ---
+# --- Face Detection (SCRFD + ArcFace) ---
+
+
+def detect_faces_simple(
+    models: LoadedModels,
+    image_bgr: np.ndarray,
+    min_face_size: int = 50,
+) -> tuple[list[np.ndarray], list[list[float]]]:
+    """Detect faces in a single BGR image.
+
+    Delegates to models.face_detector (LocalFaceDetector or TritonFaceDetector).
+
+    Returns (aligned_face_crops, face_embeddings) as parallel lists.
+    Both lists are empty when face_detector is None or no faces are found.
+    All failures are logged as warnings, not raised.
+    """
+    if models.face_detector is None:
+        return [], []
+
+    try:
+        results = models.face_detector.detect_and_embed(image_bgr, min_face_size=min_face_size)
+        if not results:
+            return [], []
+        crops = [r.aligned_crop for r in results]
+        embeddings = [r.embedding for r in results]
+        log.debug("detect_faces_simple: %d face(s) found", len(results))
+        return crops, embeddings
+    except Exception:
+        log.warning("Face detection failed (non-fatal)", exc_info=True)
+        return [], []
 
 
 def detect_faces(
     models: LoadedModels,
     images_bgr: list[np.ndarray],
     image_paths: list[str],
+    resized_images: list[np.ndarray],  # kept for API compatibility (unused)
     uuid_list: list[str],
-) -> tuple[list[list[float]], pd.DataFrame]:
-    """Detect faces and compute ArcFace embeddings via InsightFace (SCRFD + ArcFace r100).
+    batch_size: int = 25,              # kept for API compatibility (unused)
+) -> tuple[list[np.ndarray], list[list[float]], pd.DataFrame]:
+    """Detect faces in a batch of images.
 
-    Returns (embeddings, df_faces) where each embedding is a 512-dim ArcFace vector.
-    Replaces the old MTCNN + InceptionResnetV1 pipeline.
+    Delegates to models.face_detector per image.
+
+    Returns (aligned_face_crops_bgr, face_embeddings, face_detections_df).
+    Aligned crops are 112×112 BGR uint8. Embeddings are 512-dim ArcFace vectors.
+    Returns ([], [], empty DataFrame) if face_detector is None.
     """
-    if models.face_app is None:
-        return [], pd.DataFrame()
+    if models.face_detector is None:
+        return [], [], pd.DataFrame()
 
-    face_embeddings: list[list[float]] = []
-    records = []
+    all_crops: list[np.ndarray] = []
+    all_embeddings: list[list[float]] = []
+    records: list[dict] = []
 
-    for img_bgr, path, file_uuid in zip(images_bgr, image_paths, uuid_list, strict=True):
+    for img, path, file_uuid in zip(images_bgr, image_paths, uuid_list, strict=False):
         try:
-            faces = models.face_app.get(img_bgr)
-        except Exception:
-            log.warning("Face detection failed for %s", path, exc_info=True)
-            continue
+            results = models.face_detector.detect_and_embed(img)
+            if not results:
+                continue
 
-        h, w = img_bgr.shape[:2]
-        for face in faces:
-            x1, y1, x2, y2 = face.bbox.astype(int)
-            bw = x2 - x1
-            bh = y2 - y1
-            records.append(
-                {
-                    "uuid": uuid4().hex,
-                    "path": path,
-                    "file_uuid": file_uuid,
-                    "class_name": "face",
-                    "class_id": None,
-                    "confidence": int(face.det_score * 100),
-                    "xcenter": max(0.0, (x1 + bw / 2) / w),
-                    "ycenter": max(0.0, (y1 + bh / 2) / h),
-                    "width": max(0.0, bw / w),
-                    "height": max(0.0, bh / h),
-                }
-            )
-            face_embeddings.append(face.normed_embedding.tolist())
+            h, w = img.shape[:2]
+            for r in results:
+                all_crops.append(r.aligned_crop)
+                all_embeddings.append(r.embedding)
+                x1, y1, x2, y2 = r.box
+                fw = max(0.0, x2 - x1)
+                fh = max(0.0, y2 - y1)
+                records.append(
+                    {
+                        "uuid": uuid4().hex,
+                        "path": path,
+                        "file_uuid": file_uuid,
+                        "class_name": "face",
+                        "class_id": None,
+                        "confidence": int(r.score * 100),
+                        "xcenter": max(0.0, (x1 + fw / 2) / w),
+                        "ycenter": max(0.0, (y1 + fh / 2) / h),
+                        "width": max(0.0, fw / w),
+                        "height": max(0.0, fh / h),
+                    }
+                )
+        except Exception:
+            log.warning("Face detection failed for %s (non-fatal)", path, exc_info=True)
 
     df_faces = pd.DataFrame(records) if records else pd.DataFrame()
-    return face_embeddings, df_faces
+    return all_crops, all_embeddings, df_faces
+
+
+def compute_face_embeddings(
+    models: LoadedModels,
+    face_crops: list[np.ndarray],
+) -> list[list[float]]:
+    """Compute ArcFace 512-dim embeddings from aligned face crops.
+
+    Deprecated: detect_faces() now returns embeddings directly. This function
+    is kept for backward compatibility; prefer detect_faces_simple() instead.
+    """
+    if not face_crops or models.face_detector is None:
+        return []
+
+    from ring_detector.face_detector import LocalFaceDetector
+    from ring_detector.face_utils import run_arcface
+
+    if not isinstance(models.face_detector, LocalFaceDetector):
+        log.warning("compute_face_embeddings: not supported for non-local backends")
+        return []
+
+    batch = np.stack(face_crops)
+    return run_arcface(models.face_detector._recognizer, batch).tolist()
 
 
 # --- Similarity Matching ---
@@ -271,22 +331,32 @@ def process_batch(
     del full_embeddings, crop_embeddings
     clear_gpu_memory()
 
-    # 5. Face detection + embedding (InsightFace)
+    # 5. Face detection + embedding (SCRFD + ArcFace or Triton)
+    if models.face_detector is None:
+        return {"images": len(image_paths), "detections": len(df_dets), "faces": 0}
+
     log.info("Running face detection")
     uuid_list = df_meta["file_uuid"].tolist()
-    face_vectors, df_faces = detect_faces(models, padded_images, image_paths, uuid_list)
+    face_crops, face_vectors, df_faces = detect_faces(
+        models, padded_images, image_paths, resized_images, uuid_list
+    )
 
-    num_faces = len(face_vectors)
-    if face_vectors and session is not None and len(df_faces) > 0:
-        log.info("Storing %d face embeddings", num_faces)
-        db_faces = df_faces.drop(columns=["path"]).to_dict("records")
-        database.insert_detections_bulk(session, db_faces)
-        database.insert_face_embeddings_bulk(
-            session,
-            df_faces["file_uuid"].tolist(),
-            df_faces["path"].tolist(),
-            face_vectors,
-        )
+    num_faces = 0
+    if face_crops:
+        log.info("Storing %d face embedding(s)", len(face_crops))
+        if session is not None and len(df_faces) > 0:
+            db_faces = df_faces.drop(columns=["path"]).to_dict("records")
+            database.insert_detections_bulk(session, db_faces)
+
+            database.insert_face_embeddings_bulk(
+                session,
+                df_faces["file_uuid"].tolist(),
+                df_faces["path"].tolist(),
+                face_vectors,
+            )
+
+        num_faces = len(face_crops)
+        del face_crops, face_vectors
         clear_gpu_memory()
 
     return {

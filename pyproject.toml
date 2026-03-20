@@ -17,8 +17,7 @@ dependencies = [
     "torch>=2.5",                # No longer pinned — facenet-pytorch removed
     "torchvision>=0.20",
     "open-clip-torch>=2.26",     # CLIP ViT-B/32 for vehicle embeddings (512-dim)
-    "insightface>=0.7",          # SCRFD + ArcFace r100 for face detection (512-dim)
-    "onnxruntime-gpu>=1.19",     # InsightFace ONNX backend
+    "onnxruntime-gpu>=1.19",     # SCRFD + ArcFace ONNX backend
     "opencv-python-headless>=4.10",
     "Pillow>=10.4",
 
@@ -55,6 +54,7 @@ ring-ref = "ring_detector.cli:ref_main"
 ring-visits = "ring_detector.cli:visits_main"
 ring-refs = "ring_detector.cli:refs_main"
 ring-status = "ring_detector.cli:status_main"
+ring-face = "ring_detector.cli:face_main"
 
 [tool.ruff]
 line-length = 100

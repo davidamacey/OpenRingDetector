@@ -1,8 +1,8 @@
 """Main watcher: push-based Ring events → detect → identify → track → notify.
 
 Uses RingEventListener (Firebase push) for near-instant motion alerts.
-Tracks arrival/departure of known references and sends notifications
-with snapshot images via ntfy.
+Tracks arrival/departure of known references (vehicles) and face-matched persons,
+sending notifications with snapshot images via ntfy.
 """
 
 from __future__ import annotations
@@ -23,13 +23,16 @@ from ring_detector.database import (
     get_active_visits,
     get_all_references,
     get_session,
+    match_against_face_profiles,
     match_against_references,
     record_arrival,
     record_departure,
+    store_watcher_face_embedding,
 )
 from ring_detector.detector import (
     clear_gpu_memory,
     compute_clip_embeddings,
+    detect_faces_simple,
     run_detection,
 )
 from ring_detector.image_utils import pad_to_square, prepare_batch
@@ -38,6 +41,7 @@ from ring_detector.notifications import (
     notify_arrival,
     notify_departure,
     notify_ding,
+    notify_known_person,
     notify_motion,
     notify_unknown_visitor,
 )
@@ -82,6 +86,14 @@ class RingWatcher:
                 log.info("Captioner: %s via Ollama", settings.captioner.model)
             else:
                 log.warning("Captioner enabled but not available")
+
+        face_enabled = settings.face.enabled and self.models.face_detector is not None
+        log.info(
+            "Face detection: %s (threshold=%.2f, min_size=%dpx)",
+            "enabled" if face_enabled else "disabled",
+            settings.face.match_threshold,
+            settings.face.min_face_size,
+        )
 
         self.listener = ring_api.create_event_listener(
             self.ring,
@@ -170,7 +182,7 @@ class RingWatcher:
         asyncio.create_task(self._archive_video(cam_name))
 
         # Detection
-        paths, resized, _padded = prepare_batch([snap_str])
+        paths, resized, padded = prepare_batch([snap_str])
         if not paths:
             notify_motion(cam_name, ts, snap_str)
             return
@@ -206,7 +218,45 @@ class RingWatcher:
                         seen.add(m["reference_name"])
                 clear_gpu_memory()
 
-        # Arrivals
+        # Face detection + matching
+        face_matches: list[dict] = []
+        unmatched_face_embeddings: list[list[float]] = []
+
+        if settings.face.enabled and self.models.face_detector is not None:
+            face_crops, face_embeddings = detect_faces_simple(
+                self.models, padded[0], settings.face.min_face_size
+            )
+            if face_embeddings:
+                face_matches = match_against_face_profiles(
+                    self.session, face_embeddings, settings.face.match_threshold
+                )
+                matched_indices = {m["vector_index"] for m in face_matches}
+                unmatched_face_embeddings = [
+                    emb for i, emb in enumerate(face_embeddings) if i not in matched_indices
+                ]
+                log.info(
+                    "Face detection: %d face(s) found, %d matched",
+                    len(face_embeddings),
+                    len(face_matches),
+                )
+
+        # Store unmatched face embeddings for later labeling
+        for emb in unmatched_face_embeddings:
+            try:
+                store_watcher_face_embedding(self.session, snap_str, emb)
+            except Exception:
+                log.warning("Failed to store face embedding (non-fatal)", exc_info=True)
+
+        # Build combined summary: append known face names to detection summary
+        known_face_names = [m["display_name"] for m in face_matches]
+        if known_face_names and summary:
+            combined_summary = f"{summary}, {', '.join(known_face_names)}"
+        elif known_face_names:
+            combined_summary = ", ".join(known_face_names)
+        else:
+            combined_summary = summary
+
+        # --- Vehicle arrivals (with face names folded into summary) ---
         for m in matched_refs:
             existing = get_active_visit_by_reference(self.session, m["reference_name"])
             if existing:
@@ -219,11 +269,28 @@ class RingWatcher:
                     cam_name,
                     snap_str,
                 )
-                notify_arrival(m["display_name"], cam_name, summary, snap_str)
+                notify_arrival(m["display_name"], cam_name, combined_summary, snap_str)
 
-        # Unmatched
+        # --- Face-only arrivals (no vehicle match) ---
         if not matched_refs:
-            if len(person_dets) > 0:
+            seen_faces: set[str] = set()
+            for fm in face_matches:
+                if fm["profile_name"] in seen_faces:
+                    continue
+                seen_faces.add(fm["profile_name"])
+                face_ref = f"face:{fm['profile_name']}"
+                existing = get_active_visit_by_reference(self.session, face_ref)
+                if existing:
+                    extend_visit(self.session, existing)
+                else:
+                    record_arrival(
+                        self.session, face_ref, fm["display_name"], cam_name, snap_str
+                    )
+                    notify_known_person(fm["display_name"], cam_name, summary, snap_str)
+
+        # --- Unknown visitor (no known vehicle or face) ---
+        if not matched_refs and not face_matches:
+            if len(person_dets) > 0 or unmatched_face_embeddings:
                 notify_unknown_visitor(cam_name, summary, snap_str)
             else:
                 notify_motion(cam_name, f"{ts} — {summary}", snap_str)

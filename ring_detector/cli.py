@@ -16,19 +16,23 @@ from ring_detector.config import settings
 from ring_detector.database import (
     VisitEvent,
     create_tables,
+    delete_face_profile,
     find_similar_embeddings,
+    get_all_face_profiles,
     get_all_references,
     get_session,
     insert_embeddings_bulk,
     insert_metadata_bulk,
+    upsert_face_profile,
     upsert_reference,
 )
 from ring_detector.detector import (
     chunk,
     compute_clip_embeddings,
+    detect_faces_simple,
     process_batch,
 )
-from ring_detector.image_utils import get_files, prepare_batch
+from ring_detector.image_utils import get_files, imread_safe, pad_to_square, prepare_batch
 from ring_detector.models import load_models
 
 log = logging.getLogger(__name__)
@@ -267,6 +271,104 @@ def status_main():
         icon = {"OK": "+", "WARN": "~", "FAIL": "X", "MISSING": "!", "OFF": "-"}.get(status, "?")
         print(f"[{icon}] {name:<23} {status:<10} {detail}")
     print()
+
+
+def face_main():
+    """Manage face profiles: add, list, or delete known persons for recognition."""
+    parser = argparse.ArgumentParser(
+        description="Manage face profiles for person recognition",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  ring-face add david photo.jpg --display-name David\n"
+            "  ring-face list\n"
+            "  ring-face delete david"
+        ),
+    )
+    sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
+
+    add_p = sub.add_parser("add", help="Extract face embedding from image and save as profile")
+    add_p.add_argument("name", type=str, help="Unique profile key (e.g. david)")
+    add_p.add_argument("image", type=str, help="Path to image containing the person's face")
+    add_p.add_argument("--display-name", type=str, default=None, help="Human-readable name")
+
+    sub.add_parser("list", help="List all known face profiles")
+
+    del_p = sub.add_parser("delete", help="Remove a face profile")
+    del_p.add_argument("name", type=str, help="Profile key to remove")
+
+    args = parser.parse_args()
+    _setup_logging()
+
+    if args.cmd == "add":
+        _face_add(args)
+    elif args.cmd == "list":
+        _face_list()
+    elif args.cmd == "delete":
+        _face_delete(args)
+    else:
+        parser.print_help()
+
+
+def _face_add(args) -> None:
+    img = imread_safe(args.image)
+    if img is None:
+        log.error("Cannot read image: %s", args.image)
+        return
+
+    create_tables()
+    session = get_session()
+    models = load_models()
+
+    if models.face_detector is None:
+        log.error("Face models not available — check ENABLE_FACE_DETECTION and model files")
+        return
+
+    padded = pad_to_square(img)
+    _crops, embeddings = detect_faces_simple(
+        models, padded, min_face_size=settings.face.min_face_size
+    )
+
+    if not embeddings:
+        log.error("No face detected in %s (try a clearer, front-facing photo)", args.image)
+        return
+
+    if len(embeddings) > 1:
+        log.warning(
+            "%d faces found in image — using the first one. "
+            "Use a single-face photo for best results.",
+            len(embeddings),
+        )
+
+    display_name = args.display_name or args.name.replace("_", " ").title()
+    upsert_face_profile(session, args.name, display_name, embeddings[0])
+    log.info("Face profile '%s' (%s) saved", args.name, display_name)
+
+
+def _face_list() -> None:
+    create_tables()
+    session = get_session()
+    profiles = get_all_face_profiles(session)
+
+    if not profiles:
+        print("No face profiles configured. Use `ring-face add` to create one.")
+        return
+
+    print(f"\n{'Name':<25} {'Display Name':<25} {'Created'}")
+    print("-" * 70)
+    for p in profiles:
+        created = p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else "?"
+        print(f"{p.name:<25} {p.display_name:<25} {created}")
+    print()
+
+
+def _face_delete(args) -> None:
+    create_tables()
+    session = get_session()
+    if delete_face_profile(session, args.name):
+        log.info("Face profile '%s' deleted", args.name)
+    else:
+        log.error("Face profile '%s' not found", args.name)
 
 
 if __name__ == "__main__":

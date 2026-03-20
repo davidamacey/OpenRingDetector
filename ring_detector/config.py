@@ -63,6 +63,8 @@ class NotifyConfig:
 @dataclass
 class ModelConfig:
     yolo_model_path: str = os.getenv("YOLO_MODEL_PATH", "./models/yolo11m.pt")
+    scrfd_model_path: str = os.getenv("SCRFD_MODEL_PATH", "./models/scrfd_10g_bnkps.onnx")
+    arcface_model_path: str = os.getenv("ARCFACE_MODEL_PATH", "./models/arcface_w600k_r50.onnx")
     device: str = os.getenv("TORCH_DEVICE", "cuda:0")
     image_size: int = 640
     batch_size: int = int(os.getenv("BATCH_SIZE", "50"))
@@ -77,6 +79,16 @@ class CaptionerConfig:
 
 
 @dataclass
+class FaceDetectionConfig:
+    enabled: bool = os.getenv("ENABLE_FACE_DETECTION", "true").lower() == "true"
+    match_threshold: float = float(os.getenv("FACE_MATCH_THRESHOLD", "0.6"))
+    min_face_size: int = int(os.getenv("FACE_MIN_SIZE", "50"))
+    # "local" = ONNX Runtime (default); "triton" = triton-api HTTP
+    backend: str = os.getenv("FACE_BACKEND", "local")
+    triton_http_url: str = os.getenv("TRITON_HTTP_URL", "http://localhost:8000")
+
+
+@dataclass
 class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     ring: RingConfig = field(default_factory=RingConfig)
@@ -84,6 +96,7 @@ class Settings:
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     captioner: CaptionerConfig = field(default_factory=CaptionerConfig)
+    face: FaceDetectionConfig = field(default_factory=FaceDetectionConfig)
 
 
 settings = Settings()

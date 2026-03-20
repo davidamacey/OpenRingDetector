@@ -90,6 +90,23 @@ def notify_departure(display_name: str, camera_name: str, duration_mins: int) ->
     )
 
 
+def notify_known_person(
+    person_name: str,
+    camera_name: str,
+    detections_summary: str = "",
+    snapshot_path: str | None = None,
+) -> None:
+    """Known person (face-matched) arrived at camera."""
+    detail = f" ({detections_summary})" if detections_summary else ""
+    send_notification(
+        message=f"{person_name} arrived at {camera_name}{detail}",
+        title=f"{person_name} — Arrived",
+        tags="white_check_mark,bust_in_silhouette",
+        priority="high",
+        snapshot_path=snapshot_path,
+    )
+
+
 def notify_unknown_visitor(
     camera_name: str,
     detections_summary: str = "",

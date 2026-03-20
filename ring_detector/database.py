@@ -99,6 +99,18 @@ class Reference(Base):
     vector = Column(Vector(CLIP_EMBED_DIM))
 
 
+class FaceProfile(Base):
+    """Named face reference for person recognition (InceptionResnetV1 embeddings)."""
+
+    __tablename__ = "face_profiles"
+
+    uuid = Column(String, primary_key=True, default=lambda: uuid4().hex)
+    name = Column(String, unique=True)
+    display_name = Column(String)
+    vector = Column(Vector(FACE_EMBED_DIM))
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class VisitEvent(Base):
     """Tracks arrival/departure of known references."""
 
@@ -235,6 +247,128 @@ def get_all_references(session: Session) -> list[Reference]:
 
 def get_reference_by_name(session: Session, name: str) -> Reference | None:
     return session.query(Reference).filter_by(name=name).first()
+
+
+# --- Face Profiles ---
+
+
+def upsert_face_profile(
+    session: Session,
+    name: str,
+    display_name: str,
+    vector: list[float],
+) -> None:
+    """Insert or update a named face reference profile."""
+    existing = session.query(FaceProfile).filter_by(name=name).first()
+    if existing:
+        existing.vector = vector
+        existing.display_name = display_name
+    else:
+        session.add(
+            FaceProfile(
+                uuid=uuid4().hex,
+                name=name,
+                display_name=display_name,
+                vector=vector,
+            )
+        )
+    session.commit()
+    log.info("Face profile '%s' saved", display_name)
+
+
+def get_all_face_profiles(session: Session) -> list[FaceProfile]:
+    return session.query(FaceProfile).all()
+
+
+def delete_face_profile(session: Session, name: str) -> bool:
+    """Delete a face profile by name. Returns True if it existed."""
+    profile = session.query(FaceProfile).filter_by(name=name).first()
+    if not profile:
+        return False
+    session.delete(profile)
+    session.commit()
+    log.info("Face profile '%s' deleted", name)
+    return True
+
+
+def match_against_face_profiles(
+    session: Session,
+    vectors: list[list[float]],
+    threshold: float = 0.6,
+) -> list[dict]:
+    """Match face embeddings against known face profiles.
+
+    Returns one best match per embedding vector (highest similarity above threshold).
+    Deduplicates by profile name so the same person isn't returned multiple times.
+    """
+    profiles = get_all_face_profiles(session)
+    if not profiles:
+        return []
+
+    matches = []
+    seen_profiles: set[str] = set()
+
+    for i, vec in enumerate(vectors):
+        vec_np = np.array(vec)
+        best: dict | None = None
+        best_sim = threshold  # minimum to qualify
+
+        for profile in profiles:
+            ref_np = np.array(profile.vector)
+            denom = np.linalg.norm(vec_np) * np.linalg.norm(ref_np)
+            if denom == 0:
+                continue
+            similarity = float(np.dot(vec_np, ref_np) / denom)
+            if similarity > best_sim:
+                best_sim = similarity
+                best = {
+                    "vector_index": i,
+                    "profile_name": profile.name,
+                    "display_name": profile.display_name,
+                    "similarity": similarity,
+                }
+
+        if best and best["profile_name"] not in seen_profiles:
+            matches.append(best)
+            seen_profiles.add(best["profile_name"])
+
+    return matches
+
+
+def store_watcher_face_embedding(
+    session: Session,
+    snapshot_path: str,
+    vector: list[float],
+    person_name: str = "unknown",
+) -> None:
+    """Persist an unmatched face embedding (for later labeling via ring-face add)."""
+    from pathlib import Path as _Path
+
+    existing_meta = session.query(Metadata).filter_by(path=snapshot_path).first()
+    if existing_meta:
+        file_uuid = existing_meta.file_uuid
+    else:
+        file_uuid = uuid4().hex
+        session.add(
+            Metadata(
+                file_uuid=file_uuid,
+                path=snapshot_path,
+                file_name=_Path(snapshot_path).name,
+            )
+        )
+        session.flush()
+
+    session.add(
+        FaceEmbedding(
+            uuid=uuid4().hex,
+            file_uuid=file_uuid,
+            img_path=snapshot_path,
+            label="watcher_detection",
+            person_name=person_name,
+            vector=vector,
+        )
+    )
+    session.commit()
 
 
 # --- Vector Search ---
