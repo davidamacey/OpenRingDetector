@@ -23,6 +23,7 @@ from app.routers import (
     test,
     unmatched,
     visits,
+    watcher,
 )
 from app.websocket import ws_hub
 
@@ -99,6 +100,7 @@ app.include_router(status.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(images.router, prefix="/api")
 app.include_router(test.router, prefix="/api")
+app.include_router(watcher.router, prefix="/api")
 
 
 @app.get("/api/health")

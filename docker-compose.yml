@@ -68,7 +68,7 @@ services:
       - "9553:8000"
     volumes:
       - ./archive:/data/archive
-      - ./tokens:/app/tokens:ro
+      - ./tokens:/app/tokens
       - ./models:/app/models:ro
     deploy:
       resources:

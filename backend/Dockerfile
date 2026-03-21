@@ -4,7 +4,8 @@ WORKDIR /app
 
 RUN adduser --disabled-password --uid 1000 appuser && \
     apt-get update && apt-get install -y --no-install-recommends \
-        libpq-dev gcc curl \
+        libpq-dev gcc curl coreutils \
+        libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install backend requirements
@@ -20,6 +21,9 @@ RUN pip install --no-cache-dir -e .
 
 # Copy backend app
 COPY backend/app /app/app
+
+# Watcher needs write access to tokens dir (Ring token refresh)
+RUN mkdir -p /app/tokens && chown -R appuser:appuser /app/tokens
 
 USER appuser
 

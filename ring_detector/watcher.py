@@ -123,6 +123,18 @@ class RingWatcher:
         log.info("Starting Ring Watcher...")
 
         run_migrations()
+
+        # Re-add our log handler — alembic's fileConfig() replaces root handlers
+        log_file = os.environ.get("WATCHER_LOG_FILE")
+        if log_file:
+            stream = open(log_file, "a", buffering=1)  # noqa: SIM115
+            handler = _FlushHandler(stream)
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            )
+            root = logging.getLogger()
+            root.addHandler(handler)
+
         self.session = get_session()
         self.models = load_models()
         self.ring = await ring_api.authenticate()
@@ -683,12 +695,25 @@ class RingWatcher:
             log.info("Ring Watcher stopped")
 
 
+class _FlushHandler(logging.StreamHandler):
+    """StreamHandler that flushes after every emit (for subprocess log capture)."""
+
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    # Support LOG_FILE env var for subprocess log capture (used by watcher manager)
+    log_file = os.environ.get("WATCHER_LOG_FILE")
+    stream = open(log_file, "a", buffering=1) if log_file else sys.stdout  # noqa: SIM115
+    handler = _FlushHandler(stream)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
+    # Force-add handler to root logger (basicConfig may no-op if root already configured)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
 
     watcher = RingWatcher()
 

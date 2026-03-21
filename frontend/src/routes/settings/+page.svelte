@@ -1,6 +1,7 @@
 <script lang="ts">
   import Header from '$lib/components/layout/Header.svelte';
   import SystemStatusPanel from '$lib/components/status/SystemStatusPanel.svelte';
+  import WatcherPanel from '$lib/components/watcher/WatcherPanel.svelte';
   import { getSettings, patchSettings, testNotify } from '$lib/api/settings';
   import { statusStore } from '$lib/stores/status';
   import { toast } from '$lib/stores/toast';
@@ -263,6 +264,8 @@
         </div>
 
       {:else if tab === 'system'}
+        <WatcherPanel />
+        <div class="mt-4"></div>
         <SystemStatusPanel {status} />
         <div class="flex gap-3 mt-3">
           <button

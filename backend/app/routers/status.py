@@ -127,18 +127,10 @@ def _check_archive() -> ComponentStatus:
 
 
 def _check_watcher() -> bool:
-    """Check if ring-watch is running via PID file or process name."""
-    try:
-        import subprocess
+    """Check if ring-watch is running via the watcher manager."""
+    from app.watcher_manager import watcher_mgr
 
-        result = subprocess.run(
-            ["pgrep", "-f", "ring-watch"],
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    return watcher_mgr.is_running
 
 
 @router.get("/status", response_model=SystemStatus)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { statusStore } from '$lib/stores/status';
-  import StatusDot from '$lib/components/ui/StatusDot.svelte';
+  import WatcherPanel from '$lib/components/watcher/WatcherPanel.svelte';
 
   interface Props {
     title: string;
@@ -8,7 +8,6 @@
   let { title }: Props = $props();
 
   const status = $derived($statusStore);
-  const isOnline = $derived(status?.watcher_running ?? false);
 </script>
 
 <header
@@ -21,11 +20,8 @@
 >
   <h1 class="text-lg font-semibold" style="color: var(--color-text-primary);">{title}</h1>
 
-  <div class="flex items-center gap-3 text-sm" style="color: var(--color-text-secondary);">
-    <div class="flex items-center gap-1.5">
-      <StatusDot status={isOnline ? 'ok' : 'fail'} pulse={isOnline} />
-      <span>{isOnline ? 'Watcher Online' : 'Watcher Offline'}</span>
-    </div>
+  <div class="flex items-center gap-4 text-sm" style="color: var(--color-text-secondary);">
+    <WatcherPanel compact />
     {#if status?.gpu.status === 'ok'}
       <span class="hidden md:block" style="color: var(--color-text-muted);">|</span>
       <span class="hidden md:block text-xs" style="color: var(--color-text-muted);">
