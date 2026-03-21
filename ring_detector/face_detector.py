@@ -86,7 +86,7 @@ class LocalFaceDetector(FaceDetector):
             blob, det_scale = preprocess_scrfd(image_bgr, INPUT_SIZE)
             raw_outs = self._detector.run(None, {SCRFD_INPUT_NAME: blob})
             output_names = [name for stride in [8, 16, 32] for name in _STRIDE_MAP[stride]]
-            net_outs = dict(zip(output_names, raw_outs))
+            net_outs = dict(zip(output_names, raw_outs, strict=True))
 
             boxes, scores, landmarks = decode_scrfd_outputs(
                 net_outs, det_scale, det_thresh=det_thresh

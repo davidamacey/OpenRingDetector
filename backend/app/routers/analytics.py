@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.schemas import (
@@ -15,7 +15,7 @@ from app.schemas import (
     AnalyticsTopVisitor,
     AnalyticsVisitDuration,
 )
-from ring_detector.database import Detection, Event, VisitEvent, get_session
+from ring_detector.database import get_session
 
 router = APIRouter(tags=["analytics"])
 
@@ -84,9 +84,7 @@ def top_visitors(
         ),
         {"cutoff": cutoff, "limit": limit},
     ).fetchall()
-    return [
-        AnalyticsTopVisitor(display_name=r[0], visit_count=r[1], last_seen=r[2]) for r in rows
-    ]
+    return [AnalyticsTopVisitor(display_name=r[0], visit_count=r[1], last_seen=r[2]) for r in rows]
 
 
 @router.get("/analytics/detection-types", response_model=list[AnalyticsDetectionType])
@@ -107,9 +105,7 @@ def detection_types(days: int = Query(7, ge=1, le=365), session: Session = Depen
     ).fetchall()
     total = sum(r[1] for r in rows) or 1
     return [
-        AnalyticsDetectionType(
-            class_name=r[0], count=r[1], percentage=round(r[1] / total * 100, 1)
-        )
+        AnalyticsDetectionType(class_name=r[0], count=r[1], percentage=round(r[1] / total * 100, 1))
         for r in rows
     ]
 

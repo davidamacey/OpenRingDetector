@@ -5,11 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.schemas import UnmatchedFace, UnmatchedVehicle
-from ring_detector.database import Event, FaceEmbedding, Metadata, get_session
+from ring_detector.database import Event, FaceEmbedding, get_session
 
 router = APIRouter(tags=["unmatched"])
 
@@ -57,9 +56,7 @@ def unmatched_vehicles(
                 representative_crop_url=(
                     f"/api/images/{ev.snapshot_path}" if ev.snapshot_path else None
                 ),
-                all_crop_urls=(
-                    [f"/api/images/{ev.snapshot_path}"] if ev.snapshot_path else []
-                ),
+                all_crop_urls=([f"/api/images/{ev.snapshot_path}"] if ev.snapshot_path else []),
             )
         )
     return result
@@ -72,7 +69,6 @@ def unmatched_faces(
     session: Session = Depends(_get_db),
 ):
     """Return face embeddings with person_name == 'unknown'."""
-    cutoff = datetime.now() - timedelta(days=days)
     rows = (
         session.query(FaceEmbedding)
         .filter(FaceEmbedding.person_name == "unknown")

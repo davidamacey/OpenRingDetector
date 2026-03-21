@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -11,7 +12,17 @@ import asyncpg
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import analytics, events, faces, images, references, settings_router, status, unmatched, visits
+from app.routers import (
+    analytics,
+    events,
+    faces,
+    images,
+    references,
+    settings_router,
+    status,
+    unmatched,
+    visits,
+)
 from app.websocket import ws_hub
 
 log = logging.getLogger(__name__)
@@ -57,10 +68,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
 
 app = FastAPI(

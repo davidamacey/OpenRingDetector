@@ -62,7 +62,7 @@ class NotifyConfig:
 
 @dataclass
 class ModelConfig:
-    yolo_model_path: str = os.getenv("YOLO_MODEL_PATH", "./models/yolo11m.pt")
+    yolo_model_path: str = os.getenv("YOLO_MODEL_PATH", "./models/yolo26m.pt")
     scrfd_model_path: str = os.getenv("SCRFD_MODEL_PATH", "./models/scrfd_10g_bnkps.onnx")
     arcface_model_path: str = os.getenv("ARCFACE_MODEL_PATH", "./models/arcface_w600k_r50.onnx")
     device: str = os.getenv("TORCH_DEVICE", "cuda:0")
@@ -80,12 +80,18 @@ class CaptionerConfig:
 
 @dataclass
 class FaceDetectionConfig:
-    enabled: bool = os.getenv("ENABLE_FACE_DETECTION", "true").lower() == "true"
-    match_threshold: float = float(os.getenv("FACE_MATCH_THRESHOLD", "0.6"))
-    min_face_size: int = int(os.getenv("FACE_MIN_SIZE", "50"))
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_FACE_DETECTION", "true").lower() == "true"
+    )
+    match_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FACE_MATCH_THRESHOLD", "0.6"))
+    )
+    min_face_size: int = field(default_factory=lambda: int(os.getenv("FACE_MIN_SIZE", "50")))
     # "local" = ONNX Runtime (default); "triton" = triton-api HTTP
-    backend: str = os.getenv("FACE_BACKEND", "local")
-    triton_http_url: str = os.getenv("TRITON_HTTP_URL", "http://localhost:8000")
+    backend: str = field(default_factory=lambda: os.getenv("FACE_BACKEND", "local"))
+    triton_http_url: str = field(
+        default_factory=lambda: os.getenv("TRITON_HTTP_URL", "http://localhost:8000")
+    )
 
 
 @dataclass

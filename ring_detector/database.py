@@ -6,6 +6,7 @@ and embedding similarity search in a single PostgreSQL database.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime
 from uuid import uuid4
@@ -572,13 +573,11 @@ def record_event(
         "visit_event_id": visit_event_id,
         "caption": caption,
     }
-    try:
+    with contextlib.suppress(Exception):
         session.execute(
             text("SELECT pg_notify('ring_events', :payload)"),
             {"payload": json.dumps(payload)},
         )
-    except Exception:
-        pass  # pg_notify failure must not block event recording
 
     session.commit()
     log.debug("Event recorded: %s at %s", event_type, camera_name)

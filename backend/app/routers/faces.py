@@ -27,8 +27,6 @@ def _build_face_profile(name: str, session: Session) -> FaceProfileResponse:
         raise HTTPException(status_code=404, detail="Face profile not found")
 
     display_name = rows[0].label if rows[0].label != "face" else name
-    created_at = min(r.label for r in rows)  # fallback — no created_at on FaceEmbedding
-
     # Use visit events keyed as "face:{name}"
     visit_count = (
         session.query(func.count(VisitEvent.id))

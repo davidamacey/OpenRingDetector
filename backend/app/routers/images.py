@@ -37,8 +37,8 @@ async def serve_image(path: str):
         target = _resolve_safe(path)
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
+    except Exception as err:
+        raise HTTPException(status_code=400, detail="Invalid path") from err
 
     if not target.exists():
         raise HTTPException(status_code=404, detail="Image not found")

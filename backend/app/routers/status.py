@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 
@@ -86,7 +85,8 @@ def _check_ollama() -> ComponentStatus:
         url = f"{settings.captioner.ollama_url}/api/tags"
         with urllib.request.urlopen(url, timeout=3) as resp:
             if resp.status == 200:
-                return ComponentStatus(status="ok", detail=f"Ollama at {settings.captioner.ollama_url}")
+                url_str = settings.captioner.ollama_url
+                return ComponentStatus(status="ok", detail=f"Ollama at {url_str}")
         return ComponentStatus(status="warn", detail="Ollama returned non-200")
     except Exception as e:
         return ComponentStatus(status="fail", detail=str(e))

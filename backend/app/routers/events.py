@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.schemas import DetectionResponse, EventListResponse, EventResponse
-from ring_detector.database import Detection, Event, Metadata, get_session
+from ring_detector.database import Detection, Event, get_session
 
 router = APIRouter(tags=["events"])
 
