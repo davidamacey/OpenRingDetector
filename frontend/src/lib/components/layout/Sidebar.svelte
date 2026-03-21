@@ -42,12 +42,7 @@
     style="border-color: var(--color-border); min-height: 60px; text-decoration: none;"
     title="About OpenRingDetector"
   >
-    <div
-      class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-      style="background: var(--color-accent);"
-    >
-      <Camera size={16} color="white" />
-    </div>
+    <img src="/logo.svg" alt="OpenRingDetector" class="w-8 h-8 rounded-lg flex-shrink-0" />
     {#if !collapsed}
       <span class="font-semibold text-sm leading-tight" style="color: var(--color-text-primary);">
         OpenRing<br />Detector
