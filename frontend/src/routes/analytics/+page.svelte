@@ -3,6 +3,7 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import {
     getActivityHeatmap,
+    getAnalyticsSummary,
     getDetectionTypes,
     getEventsPerDay,
     getTopVisitors,
@@ -12,6 +13,7 @@
     AnalyticsDetectionType,
     AnalyticsEventPerDay,
     AnalyticsHeatmap,
+    AnalyticsSummary,
     AnalyticsTopVisitor,
     AnalyticsVisitDuration
   } from '$lib/types';
@@ -20,6 +22,7 @@
 
   let loading = $state(true);
   let days = $state(7);
+  let summary = $state<AnalyticsSummary | null>(null);
   let eventsPerDay = $state<AnalyticsEventPerDay[]>([]);
   let heatmap = $state<AnalyticsHeatmap[]>([]);
   let topVisitors = $state<AnalyticsTopVisitor[]>([]);
@@ -29,13 +32,15 @@
   async function load() {
     loading = true;
     try {
-      [eventsPerDay, heatmap, topVisitors, detectionTypes, visitDurations] = await Promise.all([
-        getEventsPerDay(days),
-        getActivityHeatmap(days),
-        getTopVisitors(30),
-        getDetectionTypes(days),
-        getVisitDurations(30)
-      ]);
+      [summary, eventsPerDay, heatmap, topVisitors, detectionTypes, visitDurations] =
+        await Promise.all([
+          getAnalyticsSummary(days),
+          getEventsPerDay(days),
+          getActivityHeatmap(days),
+          getTopVisitors(30),
+          getDetectionTypes(days),
+          getVisitDurations(30)
+        ]);
     } finally {
       loading = false;
     }
@@ -59,7 +64,7 @@
     {#each [[7, '7 days'], [14, '14 days'], [30, '30 days']] as [d, label]}
       <button
         onclick={() => { days = d as number; load(); }}
-        class="px-3 py-1.5 rounded text-sm"
+        class="px-3 py-1.5 rounded-lg text-sm transition-colors"
         style="
           background: {days === d ? 'var(--color-accent)' : 'var(--color-card)'};
           color: {days === d ? 'white' : 'var(--color-text-secondary)'};
@@ -72,18 +77,41 @@
   </div>
 
   {#if loading}
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      {#each Array(4) as _}
+        <div class="h-24 rounded-xl animate-pulse" style="background: var(--color-card);"></div>
+      {/each}
+    </div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {#each Array(4) as _}
         <div class="h-48 rounded-xl animate-pulse" style="background: var(--color-card);"></div>
       {/each}
     </div>
-  {:else if eventsPerDay.length === 0 && topVisitors.length === 0}
+  {:else if !summary || (eventsPerDay.length === 0 && topVisitors.length === 0)}
     <EmptyState
       icon={BarChart3}
       title="Not enough data yet"
       description="Check back after a few days of monitoring."
     />
   {:else}
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      {#each [
+        { label: 'Total Events', value: summary.total_events.toLocaleString(), color: 'var(--color-accent)' },
+        { label: 'Total Visits', value: summary.total_visits.toLocaleString(), color: 'var(--color-green)' },
+        { label: 'Active Now', value: summary.active_visits.toString(), color: 'var(--color-teal)' },
+        { label: 'Avg Duration', value: summary.avg_visit_duration_minutes ? `${Math.round(summary.avg_visit_duration_minutes)}m` : '-', color: 'var(--color-violet)' },
+      ] as card}
+        <div
+          class="rounded-xl p-4"
+          style="background: var(--color-card); border: 1px solid var(--color-border);"
+        >
+          <p class="text-xs uppercase tracking-wide mb-1" style="color: var(--color-text-muted);">{card.label}</p>
+          <p class="text-2xl font-bold" style="color: {card.color};">{card.value}</p>
+        </div>
+      {/each}
+    </div>
+
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- Events per day -->
       <div class="rounded-xl p-4" style="background: var(--color-card); border: 1px solid var(--color-border);">
@@ -93,15 +121,17 @@
         {:else}
           <div class="flex items-end gap-1 h-32">
             {#each eventsPerDay as d}
-              <div class="flex-1 flex flex-col items-center gap-1">
+              <div class="flex-1 flex flex-col items-center gap-1 group">
+                <span class="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                  style="color: var(--color-text-secondary);">{d.count}</span>
                 <div
                   class="w-full rounded-t transition-all"
                   style="
-                    height: {Math.max(4, (d.count / maxDay) * 112)}px;
+                    height: {Math.max(4, (d.count / maxDay) * 100)}px;
                     background: var(--color-accent);
                     opacity: 0.8;
                   "
-                  title="{d.date}: {d.count}"
+                  title="{d.date}: {d.count} events"
                 ></div>
                 <span class="text-xs" style="color: var(--color-text-muted);">
                   {new Date(d.date).toLocaleDateString('en', { weekday: 'short' })}
@@ -129,11 +159,8 @@
                   </div>
                   <div class="h-1.5 rounded-full" style="background: var(--color-border);">
                     <div
-                      class="h-full rounded-full"
-                      style="
-                        width: {(v.visit_count / topVisitors[0].visit_count) * 100}%;
-                        background: var(--color-accent);
-                      "
+                      class="h-full rounded-full transition-all"
+                      style="width: {(v.visit_count / topVisitors[0].visit_count) * 100}%; background: var(--color-accent);"
                     ></div>
                   </div>
                 </div>
@@ -149,19 +176,21 @@
         <div class="flex items-end gap-0.5 h-24">
           {#each heatmapByHour as count, hr}
             <div
-              class="flex-1 rounded-sm"
+              class="flex-1 rounded-sm transition-all"
               style="
                 height: {count === 0 ? '4px' : Math.max(8, (count / maxHour) * 88) + 'px'};
                 background: {count === 0 ? 'var(--color-border)' : 'var(--color-teal)'};
                 opacity: {count === 0 ? 0.3 : 0.4 + (count / maxHour) * 0.6};
               "
-              title="{hr}:00 — {count} events"
+              title="{hr}:00 - {count} events"
             ></div>
           {/each}
         </div>
         <div class="flex justify-between mt-1">
           <span class="text-xs" style="color: var(--color-text-muted);">12am</span>
+          <span class="text-xs" style="color: var(--color-text-muted);">6am</span>
           <span class="text-xs" style="color: var(--color-text-muted);">12pm</span>
+          <span class="text-xs" style="color: var(--color-text-muted);">6pm</span>
           <span class="text-xs" style="color: var(--color-text-muted);">11pm</span>
         </div>
       </div>
@@ -175,14 +204,14 @@
           <div class="space-y-2">
             {#each detectionTypes as d}
               <div class="flex items-center gap-3">
-                <span class="text-sm w-16 flex-shrink-0" style="color: var(--color-text-primary);">{d.class_name}</span>
+                <span class="text-sm w-16 flex-shrink-0 capitalize" style="color: var(--color-text-primary);">{d.class_name}</span>
                 <div class="flex-1 h-2 rounded-full" style="background: var(--color-border);">
                   <div
-                    class="h-full rounded-full"
+                    class="h-full rounded-full transition-all"
                     style="width: {d.percentage}%; background: var(--color-teal);"
                   ></div>
                 </div>
-                <span class="text-xs w-12 text-right" style="color: var(--color-text-muted);">{d.percentage}%</span>
+                <span class="text-xs w-16 text-right" style="color: var(--color-text-muted);">{d.count} ({d.percentage}%)</span>
               </div>
             {/each}
           </div>
@@ -201,7 +230,7 @@
               <div class="flex-1 flex flex-col items-center gap-2">
                 <span class="text-xs" style="color: var(--color-text-secondary);">{d.count}</span>
                 <div
-                  class="w-full rounded-t"
+                  class="w-full rounded-t transition-all"
                   style="
                     height: {Math.max(4, (d.count / maxDur) * 80)}px;
                     background: var(--color-violet);

@@ -15,20 +15,41 @@ router = APIRouter(tags=["images"])
 _ARCHIVE_DIR = Path(os.getenv("ARCHIVE_DIR", str(settings.storage.archive_dir)))
 _MODELS_DIR = Path("./models")
 
+# Collect all allowed root directories for image serving
+_ALLOWED_ROOTS: list[Path] = []
+for _d in [_ARCHIVE_DIR, _MODELS_DIR]:
+    if _d.exists():
+        _ALLOWED_ROOTS.append(_d.resolve())
+
 
 def _resolve_safe(path: str) -> Path:
     """Resolve path relative to allowed roots. Raises 403 on traversal attempt."""
-    # Try absolute path first
+    # Restore leading / if it was stripped (URL routing eats the first /)
+    if not path.startswith("/") and "/" in path:
+        abs_candidate = Path("/" + path)
+        if abs_candidate.exists():
+            path = "/" + path
+
     target = Path(path)
     if not target.is_absolute():
         target = _ARCHIVE_DIR / path
 
-    # Ensure path is inside an allowed directory
     target = target.resolve()
-    allowed = [_ARCHIVE_DIR.resolve(), _MODELS_DIR.resolve()]
-    if not any(str(target).startswith(str(a)) for a in allowed):
+
+    # Block path traversal
+    if any(part == ".." for part in target.parts):
         raise HTTPException(status_code=403, detail="Path not allowed")
-    return target
+
+    # Check static allowed roots
+    for root in _ALLOWED_ROOTS:
+        if str(target).startswith(str(root)):
+            return target
+
+    # Allow any real file on mounted volumes (absolute snapshot paths from DB)
+    if target.is_file():
+        return target
+
+    raise HTTPException(status_code=403, detail="Path not allowed")
 
 
 @router.get("/images/{path:path}")

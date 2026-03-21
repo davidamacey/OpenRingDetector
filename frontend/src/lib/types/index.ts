@@ -105,3 +105,17 @@ export interface AnalyticsHeatmap { hour: number; count: number; }
 export interface AnalyticsTopVisitor { display_name: string; visit_count: number; last_seen: string; }
 export interface AnalyticsDetectionType { class_name: string; count: number; percentage: number; }
 export interface AnalyticsVisitDuration { bucket: string; count: number; }
+
+export interface AnalyticsSummary {
+  total_events: number;
+  total_visits: number;
+  active_visits: number;
+  total_detections: number;
+  cameras: string[];
+  avg_visit_duration_minutes: number | null;
+}
+
+export interface AnalyticsTimeline {
+  timestamp: string;
+  count: number;
+}

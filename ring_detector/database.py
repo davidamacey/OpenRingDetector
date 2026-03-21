@@ -171,9 +171,8 @@ def run_migrations() -> None:
     """Run all pending Alembic migrations to bring the schema to head."""
     from pathlib import Path
 
-    from alembic.config import Config
-
     from alembic import command
+    from alembic.config import Config
 
     ini_path = Path(__file__).parent.parent / "alembic.ini"
     cfg = Config(str(ini_path))

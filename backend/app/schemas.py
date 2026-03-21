@@ -152,3 +152,27 @@ class AnalyticsDetectionType(BaseModel):
 class AnalyticsVisitDuration(BaseModel):
     bucket: str
     count: int
+
+
+class AnalyticsSummary(BaseModel):
+    total_events: int
+    total_visits: int
+    active_visits: int
+    total_detections: int
+    cameras: list[str]
+    avg_visit_duration_minutes: float | None
+
+
+class AnalyticsTimeline(BaseModel):
+    timestamp: str
+    count: int
+
+
+class SettingsUpdateRequest(BaseModel):
+    ring: dict | None = None
+    model: dict | None = None
+    captioner: dict | None = None
+    notify: dict | None = None
+    storage: dict | None = None
+    face: dict | None = None
+    video: dict | None = None

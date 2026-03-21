@@ -28,8 +28,11 @@ def _check_db() -> ComponentStatus:
 
 def _check_gpu() -> ComponentStatus:
     try:
+        import shutil
         import subprocess
 
+        if not shutil.which("nvidia-smi"):
+            return ComponentStatus(status="off", detail="nvidia-smi not available (API container)")
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader"],
             capture_output=True,
@@ -41,7 +44,7 @@ def _check_gpu() -> ComponentStatus:
             return ComponentStatus(status="ok", detail=info)
         return ComponentStatus(status="fail", detail="nvidia-smi failed")
     except Exception as e:
-        return ComponentStatus(status="missing", detail=str(e))
+        return ComponentStatus(status="off", detail=str(e))
 
 
 def _check_yolo() -> ComponentStatus:
@@ -70,8 +73,27 @@ def _check_ring_token() -> ComponentStatus:
 
 
 def _check_face_models() -> ComponentStatus:
-    # Face models not in this branch — report as off
-    return ComponentStatus(status="off", detail="Face detection not configured in this build")
+    try:
+        from ring_detector.config import settings
+
+        if not settings.face.enabled:
+            return ComponentStatus(status="off", detail="Face detection disabled")
+        scrfd = Path(settings.model.scrfd_model_path)
+        arcface = Path(settings.model.arcface_model_path)
+        if scrfd.exists() and arcface.exists():
+            scrfd_mb = scrfd.stat().st_size // (1024 * 1024)
+            arcface_mb = arcface.stat().st_size // (1024 * 1024)
+            return ComponentStatus(
+                status="ok", detail=f"SCRFD ({scrfd_mb}MB) + ArcFace ({arcface_mb}MB)"
+            )
+        missing = []
+        if not scrfd.exists():
+            missing.append("SCRFD")
+        if not arcface.exists():
+            missing.append("ArcFace")
+        return ComponentStatus(status="missing", detail=f"{', '.join(missing)} not found")
+    except Exception as e:
+        return ComponentStatus(status="fail", detail=str(e))
 
 
 def _check_ollama() -> ComponentStatus:

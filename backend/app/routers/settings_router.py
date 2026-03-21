@@ -8,7 +8,6 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from app.schemas import SettingsResponse
 from ring_detector.config import settings
 
 router = APIRouter(tags=["settings"])
@@ -25,32 +24,43 @@ def _load_overrides() -> dict:
     return {}
 
 
-@router.get("/settings", response_model=SettingsResponse)
+@router.get("/settings")
 def get_settings():
-    return SettingsResponse(
-        ring={
+    return {
+        "ring": {
             "camera_name": settings.ring.camera_name,
             "departure_timeout": settings.ring.departure_timeout,
             "cooldown_seconds": settings.ring.cooldown_seconds,
         },
-        model={
+        "model": {
             "yolo_model_path": settings.model.yolo_model_path,
             "device": settings.model.device,
             "batch_size": settings.model.batch_size,
         },
-        captioner={
+        "captioner": {
             "enabled": settings.captioner.enabled,
             "ollama_url": settings.captioner.ollama_url,
             "model": settings.captioner.model,
         },
-        notify={
+        "notify": {
             "ntfy_url": settings.notify.ntfy_url,
             "attach_snapshot": settings.notify.attach_snapshot,
         },
-        storage={
+        "storage": {
             "archive_dir": str(settings.storage.archive_dir),
         },
-    )
+        "face": {
+            "enabled": settings.face.enabled,
+            "match_threshold": settings.face.match_threshold,
+            "min_face_size": settings.face.min_face_size,
+        },
+        "video": {
+            "enabled": settings.video.enabled,
+            "frame_interval": settings.video.frame_interval,
+            "max_frames": settings.video.max_frames,
+            "wait_timeout": settings.video.wait_timeout,
+        },
+    }
 
 
 @router.patch("/settings")

@@ -12,6 +12,8 @@ from app.schemas import (
     AnalyticsDetectionType,
     AnalyticsEventPerDay,
     AnalyticsHeatmap,
+    AnalyticsSummary,
+    AnalyticsTimeline,
     AnalyticsTopVisitor,
     AnalyticsVisitDuration,
 )
@@ -146,3 +148,109 @@ def visit_durations(days: int = Query(30, ge=1, le=365), session: Session = Depe
             buckets["4hr+"] += 1
 
     return [AnalyticsVisitDuration(bucket=k, count=v) for k, v in buckets.items()]
+
+
+@router.get("/analytics/summary", response_model=AnalyticsSummary)
+def analytics_summary(days: int = Query(7, ge=1, le=365), session: Session = Depends(_get_db)):
+    """High-level summary: counts, active visits, avg duration."""
+    cutoff = datetime.now() - timedelta(days=days)
+
+    total_events = (
+        session.execute(
+            text("SELECT COUNT(*) FROM events WHERE occurred_at >= :cutoff"),
+            {"cutoff": cutoff},
+        ).scalar()
+        or 0
+    )
+
+    total_visits = (
+        session.execute(
+            text("SELECT COUNT(*) FROM visit_events WHERE arrived_at >= :cutoff"),
+            {"cutoff": cutoff},
+        ).scalar()
+        or 0
+    )
+
+    active_visits = (
+        session.execute(
+            text("SELECT COUNT(*) FROM visit_events WHERE departed_at IS NULL"),
+        ).scalar()
+        or 0
+    )
+
+    total_detections = (
+        session.execute(
+            text(
+                """
+            SELECT COUNT(*) FROM detections d
+            JOIN metadata m ON d.file_uuid = m.file_uuid
+            WHERE m.created_at >= :cutoff
+            """
+            ),
+            {"cutoff": cutoff},
+        ).scalar()
+        or 0
+    )
+
+    cameras = [
+        r[0]
+        for r in session.execute(
+            text("SELECT DISTINCT camera_name FROM events ORDER BY camera_name")
+        ).fetchall()
+    ]
+
+    avg_dur = session.execute(
+        text(
+            """
+            SELECT AVG(EXTRACT(EPOCH FROM (departed_at - arrived_at)) / 60)
+            FROM visit_events
+            WHERE arrived_at >= :cutoff AND departed_at IS NOT NULL
+            """
+        ),
+        {"cutoff": cutoff},
+    ).scalar()
+
+    return AnalyticsSummary(
+        total_events=total_events,
+        total_visits=total_visits,
+        active_visits=active_visits,
+        total_detections=total_detections,
+        cameras=cameras,
+        avg_visit_duration_minutes=round(avg_dur, 1) if avg_dur else None,
+    )
+
+
+@router.get("/analytics/timeline", response_model=list[AnalyticsTimeline])
+def analytics_timeline(
+    days: int = Query(7, ge=1, le=365),
+    interval: str = Query("hour", pattern="^(hour|day)$"),
+    session: Session = Depends(_get_db),
+):
+    """Hourly or daily event counts for chart rendering."""
+    cutoff = datetime.now() - timedelta(days=days)
+    if interval == "hour":
+        rows = session.execute(
+            text(
+                """
+                SELECT date_trunc('hour', occurred_at) AS ts, COUNT(*) AS cnt
+                FROM events
+                WHERE occurred_at >= :cutoff
+                GROUP BY ts ORDER BY ts
+                """
+            ),
+            {"cutoff": cutoff},
+        ).fetchall()
+    else:
+        rows = session.execute(
+            text(
+                """
+                SELECT DATE(occurred_at) AS ts, COUNT(*) AS cnt
+                FROM events
+                WHERE occurred_at >= :cutoff
+                GROUP BY DATE(occurred_at) ORDER BY ts
+                """
+            ),
+            {"cutoff": cutoff},
+        ).fetchall()
+
+    return [AnalyticsTimeline(timestamp=str(r[0]), count=r[1]) for r in rows]

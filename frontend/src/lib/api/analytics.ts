@@ -2,6 +2,8 @@ import type {
   AnalyticsDetectionType,
   AnalyticsEventPerDay,
   AnalyticsHeatmap,
+  AnalyticsSummary,
+  AnalyticsTimeline,
   AnalyticsTopVisitor,
   AnalyticsVisitDuration
 } from '$lib/types';
@@ -29,5 +31,15 @@ export async function getDetectionTypes(days = 7): Promise<AnalyticsDetectionTyp
 
 export async function getVisitDurations(days = 30): Promise<AnalyticsVisitDuration[]> {
   const res = await api.get('/analytics/visit-durations', { params: { days } });
+  return res.data;
+}
+
+export async function getAnalyticsSummary(days = 7): Promise<AnalyticsSummary> {
+  const res = await api.get('/analytics/summary', { params: { days } });
+  return res.data;
+}
+
+export async function getAnalyticsTimeline(days = 7, interval = 'hour'): Promise<AnalyticsTimeline[]> {
+  const res = await api.get('/analytics/timeline', { params: { days, interval } });
   return res.data;
 }

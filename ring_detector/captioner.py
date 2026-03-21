@@ -138,7 +138,7 @@ def caption_frames(frames: list[bytes | str | Path], max_frames: int = 5) -> str
     images_b64 = []
     for frame in frames:
         try:
-            data = Path(frame).read_bytes() if isinstance(frame, (str, Path)) else frame
+            data = Path(frame).read_bytes() if isinstance(frame, str | Path) else frame
             images_b64.append(base64.b64encode(data).encode("utf-8").decode("utf-8"))
         except Exception:
             log.warning("Failed to encode frame for captioning", exc_info=True)

@@ -695,12 +695,16 @@ def _test_notify(
         summary_parts.append(f"{cls} x{n}" if n > 1 else cls)
     summary = ", ".join(summary_parts)
 
-    # Save best frame
+    # Save best frame to archive so dashboard can serve it
     best_frame = frame_images[best_frame_idx]
-    best_path = Path("test_output") / f"best_frame_{cam_name.replace(' ', '_')}.jpg"
-    best_path.parent.mkdir(exist_ok=True)
+    snap_dir = settings.storage.snapshot_dir()
+    snap_name = f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cam_name.replace(' ', '_')}.jpg"
+    best_path = snap_dir / snap_name
     cv2.imwrite(str(best_path), best_frame)
     snap_str = str(best_path)
+    # Also save to test_output for local inspection
+    Path("test_output").mkdir(exist_ok=True)
+    cv2.imwrite(f"test_output/best_frame_{cam_name.replace(' ', '_')}.jpg", best_frame)
 
     # Multi-frame caption
     if settings.captioner.enabled:
@@ -745,13 +749,37 @@ def _test_notify(
     else:
         combined = summary
 
-    # Send notifications
-    ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Send notifications + record events to DB (shows in dashboard via pg_notify → WebSocket)
+    from ring_detector.database import record_arrival, record_event
+
+    # Always record a motion event first
+    record_event(
+        session,
+        event_type="motion",
+        camera_name=cam_name,
+        snapshot_path=snap_str,
+        detection_summary=combined,
+        caption=summary if settings.captioner.enabled else None,
+    )
+    print(f"  EVENT: motion recorded at {cam_name}")
 
     if matched_refs:
         for m in matched_refs:
             print(f"  NOTIFY: {m['display_name']} arrived at {cam_name} ({combined})")
             notify_arrival(m["display_name"], cam_name, combined, snap_str)
+            visit = record_arrival(
+                session, m["reference_name"], m["display_name"], cam_name, snap_str
+            )
+            record_event(
+                session,
+                event_type="arrival",
+                camera_name=cam_name,
+                snapshot_path=snap_str,
+                detection_summary=combined,
+                reference_name=m["reference_name"],
+                display_name=m["display_name"],
+                visit_event_id=visit.id,
+            )
     elif face_matches:
         seen_f: set[str] = set()
         for fm in face_matches:
@@ -759,14 +787,36 @@ def _test_notify(
                 seen_f.add(fm["profile_name"])
                 print(f"  NOTIFY: {fm['display_name']} arrived at {cam_name}")
                 notify_known_person(fm["display_name"], cam_name, summary, snap_str)
+                record_event(
+                    session,
+                    event_type="arrival",
+                    camera_name=cam_name,
+                    snapshot_path=snap_str,
+                    detection_summary=combined,
+                    reference_name=f"face:{fm['profile_name']}",
+                    display_name=fm["display_name"],
+                )
     elif has_persons:
         print(f"  NOTIFY: Unknown visitor at {cam_name} ({summary})")
         notify_unknown_visitor(cam_name, summary, snap_str)
     else:
+        ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"  NOTIFY: Motion at {cam_name} ({summary})")
-        notify_motion(cam_name, f"{ts} — {summary}" if summary else ts, snap_str)
+        notify_motion(cam_name, f"{ts_str} - {summary}" if summary else ts_str, snap_str)
 
-    print("  Notification sent!")
+    print("  Events recorded + notification sent!")
+
+
+def api_main():
+    """Start the FastAPI dashboard API server."""
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+    )
 
 
 if __name__ == "__main__":

@@ -3,23 +3,23 @@
   import {
     Activity,
     BarChart3,
-    Bell,
     Camera,
+    Car,
     ChevronLeft,
     ChevronRight,
     Clock,
     HelpCircle,
     Settings,
-    Shield,
     Users
   } from 'lucide-svelte';
 
-  let collapsed = false;
+  let collapsed = $state(false);
 
   const navItems = [
     { href: '/', label: 'Live Feed', icon: Activity },
-    { href: '/history', label: 'Visit History', icon: Clock },
-    { href: '/profiles', label: 'Profiles', icon: Users },
+    { href: '/history', label: 'History', icon: Clock },
+    { href: '/vehicles', label: 'Vehicles', icon: Car },
+    { href: '/faces', label: 'Faces', icon: Users },
     { href: '/unmatched', label: 'Unmatched', icon: HelpCircle },
     { href: '/analytics', label: 'Analytics', icon: BarChart3 },
     { href: '/settings', label: 'Settings', icon: Settings }
@@ -36,9 +36,11 @@
   "
 >
   <!-- Logo -->
-  <div
-    class="flex items-center gap-3 px-4 py-4 border-b"
-    style="border-color: var(--color-border); min-height: 60px;"
+  <a
+    href="/about"
+    class="flex items-center gap-3 px-4 py-4 border-b transition-colors"
+    style="border-color: var(--color-border); min-height: 60px; text-decoration: none;"
+    title="About OpenRingDetector"
   >
     <div
       class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -51,7 +53,7 @@
         OpenRing<br />Detector
       </span>
     {/if}
-  </div>
+  </a>
 
   <!-- Nav -->
   <nav class="flex-1 py-3 overflow-y-auto">

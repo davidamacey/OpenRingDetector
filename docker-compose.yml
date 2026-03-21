@@ -10,7 +10,7 @@ services:
       POSTGRES_DB: ${DB_NAME}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "${DB_PORT:-5433}:5432"
+      - "9550:5432"
     volumes:
       - ring_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +24,7 @@ services:
     image: ollama/ollama:latest
     restart: always
     ports:
-      - "11434:11434"
+      - "9551:11434"
     volumes:
       - ollama_data:/root/.ollama
     deploy:
@@ -41,15 +41,56 @@ services:
     restart: always
     command: serve
     ports:
-      - "8090:80"
+      - "9552:80"
     volumes:
       - ntfy_data:/var/lib/ntfy
     environment:
-      NTFY_BASE_URL: http://192.168.30.11:8090
+      NTFY_BASE_URL: http://192.168.30.11:9552
       NTFY_UPSTREAM_BASE_URL: https://ntfy.sh
       NTFY_ATTACHMENT_CACHE_DIR: /var/lib/ntfy/attachments
       NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT: 1G
       NTFY_ATTACHMENT_FILE_SIZE_LIMIT: 10M
+
+  ring-api:
+    container_name: ring-api
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: always
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      OLLAMA_URL: http://ollama:11434
+      NTFY_URL: http://ntfy:80/ring_cam
+      ARCHIVE_DIR: /data/archive
+    ports:
+      - "9553:8000"
+    volumes:
+      - ./archive:/data/archive
+      - ./tokens:/app/tokens:ro
+      - ./models:/app/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info
+
+  ring-frontend:
+    container_name: ring-frontend
+    build:
+      context: ./frontend
+    restart: always
+    ports:
+      - "9554:80"
+    depends_on:
+      - ring-api
 
 volumes:
   ring_data:

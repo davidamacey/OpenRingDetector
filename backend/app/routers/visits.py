@@ -25,7 +25,8 @@ def _get_db():
 def _snapshot_url(path: str | None) -> str | None:
     if not path:
         return None
-    return f"/api/images/{quote(path, safe='/')}"
+    clean = path.lstrip("/")
+    return f"/api/images/{quote(clean, safe='/')}"
 
 
 def _build_visit(v: VisitEvent) -> VisitResponse:

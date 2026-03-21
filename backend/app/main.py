@@ -20,6 +20,7 @@ from app.routers import (
     references,
     settings_router,
     status,
+    test,
     unmatched,
     visits,
 )
@@ -97,11 +98,36 @@ app.include_router(analytics.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(images.router, prefix="/api")
+app.include_router(test.router, prefix="/api")
 
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "uptime_seconds": int(time.time() - _start_time)}
+    """Quick health check with component status summary."""
+    from app.routers.status import (
+        _check_archive,
+        _check_db,
+        _check_gpu,
+        _check_ollama,
+        _check_ring_token,
+        _check_watcher,
+        _check_yolo,
+    )
+
+    db = _check_db()
+    return {
+        "status": "ok" if db.status == "ok" else "degraded",
+        "uptime_seconds": int(time.time() - _start_time),
+        "components": {
+            "database": db.status,
+            "gpu": _check_gpu().status,
+            "yolo_model": _check_yolo().status,
+            "ring_token": _check_ring_token().status,
+            "ollama": _check_ollama().status,
+            "archive": _check_archive().status,
+            "watcher": "ok" if _check_watcher() else "fail",
+        },
+    }
 
 
 @app.websocket("/api/ws")

@@ -74,3 +74,4 @@ Thumbs.db
 # Claude Code worktrees
 .claude/worktrees/
 test_output/
+archive/

@@ -1,118 +1,167 @@
 <script lang="ts">
   import Header from '$lib/components/layout/Header.svelte';
-  import VisitCard from '$lib/components/visits/VisitCard.svelte';
+  import EventCard from '$lib/components/events/EventCard.svelte';
+  import SnapshotModal from '$lib/components/events/SnapshotModal.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import SkeletonCard from '$lib/components/ui/SkeletonCard.svelte';
-  import { getVisits } from '$lib/api/visits';
-  import type { VisitListResponse, VisitResponse } from '$lib/types';
+  import { getEvents } from '$lib/api/events';
+  import { getCameras } from '$lib/api/status';
+  import type { EventResponse } from '$lib/types';
   import { Clock } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
   let loading = $state(true);
-  let visits = $state<VisitResponse[]>([]);
+  let events = $state<EventResponse[]>([]);
   let total = $state(0);
-  let nameFilter = $state('');
-  let activeOnly = $state(false);
-  let offset = $state(0);
   let hasMore = $state(false);
-  let debounceTimer: ReturnType<typeof setTimeout>;
+  let loadingMore = $state(false);
+  let selectedEvent = $state<EventResponse | null>(null);
+
+  // Filters
+  let camera = $state('');
+  let type = $state('');
+  let fromDate = $state('');
+  let toDate = $state('');
+  let cameras = $state<string[]>([]);
 
   async function load(reset = true) {
-    if (reset) {
-      offset = 0;
-      visits = [];
-    }
-    loading = true;
+    if (reset) events = [];
+    loading = reset;
+    loadingMore = !reset;
     try {
-      const res = await getVisits({
+      const res = await getEvents({
         limit: 50,
-        offset: reset ? 0 : offset,
-        name: nameFilter || undefined,
-        active_only: activeOnly || undefined,
+        offset: reset ? 0 : events.length,
+        camera: camera || undefined,
+        type: type || undefined,
+        from: fromDate || undefined,
+        to: toDate || undefined,
       });
       if (reset) {
-        visits = res.items;
+        events = res.items;
       } else {
-        visits = [...visits, ...res.items];
-        offset += res.items.length;
+        events = [...events, ...res.items];
       }
       total = res.total;
-      hasMore = visits.length < res.total;
+      hasMore = events.length < total;
     } finally {
       loading = false;
+      loadingMore = false;
     }
   }
 
-  function onNameInput() {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => load(), 300);
+  function resetFilters() {
+    camera = '';
+    type = '';
+    fromDate = '';
+    toDate = '';
+    load();
   }
 
-  // Group by date
+  // Group events by date
   const grouped = $derived(
-    visits.reduce(
-      (acc, v) => {
-        const date = new Date(v.arrived_at).toLocaleDateString('en-US', {
+    events.reduce(
+      (acc, ev) => {
+        const date = new Date(ev.occurred_at).toLocaleDateString('en-US', {
           weekday: 'long',
           month: 'long',
           day: 'numeric'
         });
         if (!acc[date]) acc[date] = [];
-        acc[date].push(v);
+        acc[date].push(ev);
         return acc;
       },
-      {} as Record<string, VisitResponse[]>
+      {} as Record<string, EventResponse[]>
     )
   );
 
-  onMount(() => load());
+  onMount(async () => {
+    const [_, camsData] = await Promise.all([load(), getCameras()]);
+    cameras = camsData.map((c) => c.name);
+  });
 </script>
 
-<Header title="Visit History" />
+<Header title="Event History" />
 
 <div class="flex-1 overflow-y-auto p-4">
   <!-- Filters -->
-  <div class="flex flex-wrap gap-3 mb-4">
+  <div
+    class="flex flex-wrap items-center gap-3 mb-4 p-3 rounded-xl"
+    style="background: var(--color-card); border: 1px solid var(--color-border);"
+  >
+    <select
+      bind:value={camera}
+      onchange={() => load()}
+      class="text-sm rounded-lg px-3 py-2"
+      style="background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border);"
+    >
+      <option value="">All Cameras</option>
+      {#each cameras as cam}
+        <option value={cam}>{cam}</option>
+      {/each}
+    </select>
+
+    <select
+      bind:value={type}
+      onchange={() => load()}
+      class="text-sm rounded-lg px-3 py-2"
+      style="background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border);"
+    >
+      <option value="">All Types</option>
+      <option value="motion">Motion</option>
+      <option value="arrival">Arrival</option>
+      <option value="departure">Departure</option>
+      <option value="ding">Doorbell</option>
+    </select>
+
     <input
-      type="text"
-      placeholder="Search by name..."
-      bind:value={nameFilter}
-      oninput={onNameInput}
-      class="flex-1 min-w-48 text-sm px-3 py-2 rounded-lg"
-      style="
-        background: var(--color-card);
-        color: var(--color-text-primary);
-        border: 1px solid var(--color-border);
-      "
+      type="date"
+      bind:value={fromDate}
+      onchange={() => load()}
+      class="text-sm rounded-lg px-3 py-2"
+      style="background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border);"
+      placeholder="From"
     />
-    <label class="flex items-center gap-2 text-sm cursor-pointer" style="color: var(--color-text-secondary);">
-      <input
-        type="checkbox"
-        bind:checked={activeOnly}
-        onchange={() => load()}
-        class="rounded"
-      />
-      Active only
-    </label>
-    <span class="text-sm" style="color: var(--color-text-muted);">
-      {total} visits total
+
+    <input
+      type="date"
+      bind:value={toDate}
+      onchange={() => load()}
+      class="text-sm rounded-lg px-3 py-2"
+      style="background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border);"
+      placeholder="To"
+    />
+
+    {#if camera || type || fromDate || toDate}
+      <button
+        onclick={resetFilters}
+        class="text-xs px-3 py-2 rounded-lg"
+        style="color: var(--color-accent); background: rgba(59,130,246,0.1);"
+      >
+        Clear filters
+      </button>
+    {/if}
+
+    <span class="text-xs ml-auto" style="color: var(--color-text-muted);">
+      {total} events
     </span>
   </div>
 
-  {#if loading && visits.length === 0}
+  <!-- Event list -->
+  {#if loading}
     <div class="space-y-2">
-      {#each Array(5) as _}
+      {#each Array(8) as _}
         <SkeletonCard />
       {/each}
     </div>
-  {:else if visits.length === 0}
+  {:else if events.length === 0}
     <EmptyState
       icon={Clock}
-      title="No visits found"
-      description="No visits match your filters, or ring-watch hasn't recorded any yet."
+      title="No events found"
+      description="No events match your filters, or ring-watch hasn't recorded any yet."
     />
   {:else}
-    {#each Object.entries(grouped) as [date, dayVisits]}
+    {#each Object.entries(grouped) as [date, dayEvents]}
       <div class="mb-6">
         <div
           class="text-xs font-semibold uppercase tracking-wider py-2 mb-2 border-b"
@@ -121,8 +170,8 @@
           {date}
         </div>
         <div class="space-y-2">
-          {#each dayVisits as visit (visit.id)}
-            <VisitCard {visit} />
+          {#each dayEvents as event (event.id)}
+            <EventCard {event} onclick={(e) => (selectedEvent = e)} />
           {/each}
         </div>
       </div>
@@ -131,15 +180,14 @@
     {#if hasMore}
       <button
         onclick={() => load(false)}
-        class="w-full py-2 text-sm rounded-lg mt-2"
-        style="
-          background: var(--color-card);
-          color: var(--color-text-secondary);
-          border: 1px solid var(--color-border);
-        "
+        disabled={loadingMore}
+        class="w-full py-2.5 text-sm rounded-lg mt-2 transition-colors"
+        style="background: var(--color-card); color: var(--color-text-secondary); border: 1px solid var(--color-border);"
       >
-        Load more
+        {loadingMore ? 'Loading...' : 'Load more events'}
       </button>
     {/if}
   {/if}
 </div>
+
+<SnapshotModal event={selectedEvent} onclose={() => (selectedEvent = null)} />

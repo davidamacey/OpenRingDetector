@@ -14,7 +14,7 @@ load_dotenv()
 @dataclass
 class DatabaseConfig:
     host: str = os.getenv("DB_HOST", "localhost")
-    port: int = int(os.getenv("DB_PORT", "5433"))
+    port: int = int(os.getenv("DB_PORT", "9550"))
     name: str = os.getenv("DB_NAME", "ring")
     user: str = os.getenv("DB_USER", "postgres")
     password: str = os.getenv("DB_PASSWORD", "postgres")
@@ -56,7 +56,7 @@ class StorageConfig:
 
 @dataclass
 class NotifyConfig:
-    ntfy_url: str = os.getenv("NTFY_URL", "http://ntfy.superdave.us/ring_cam")
+    ntfy_url: str = os.getenv("NTFY_URL", "http://localhost:9552/ring_cam")
     attach_snapshot: bool = os.getenv("NTFY_ATTACH_SNAPSHOT", "true").lower() == "true"
 
 
@@ -73,7 +73,7 @@ class ModelConfig:
 @dataclass
 class CaptionerConfig:
     enabled: bool = os.getenv("CAPTIONER_ENABLED", "false").lower() == "true"
-    ollama_url: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    ollama_url: str = os.getenv("OLLAMA_URL", "http://localhost:9551")
     model: str = os.getenv("CAPTIONER_MODEL", "gemma3:4b")
     timeout: int = int(os.getenv("CAPTIONER_TIMEOUT", "60"))
 
