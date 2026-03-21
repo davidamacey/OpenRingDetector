@@ -19,5 +19,39 @@ services:
       timeout: 5s
       retries: 5
 
+  ollama:
+    container_name: ring-ollama
+    image: ollama/ollama:latest
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+  ntfy:
+    container_name: ring-ntfy
+    image: binwiederhier/ntfy:latest
+    restart: always
+    command: serve
+    ports:
+      - "8090:80"
+    volumes:
+      - ntfy_data:/var/lib/ntfy
+    environment:
+      NTFY_BASE_URL: http://192.168.30.11:8090
+      NTFY_UPSTREAM_BASE_URL: https://ntfy.sh
+      NTFY_ATTACHMENT_CACHE_DIR: /var/lib/ntfy/attachments
+      NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT: 1G
+      NTFY_ATTACHMENT_FILE_SIZE_LIMIT: 10M
+
 volumes:
   ring_data:
+  ollama_data:
+  ntfy_data:

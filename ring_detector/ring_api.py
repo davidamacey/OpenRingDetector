@@ -6,6 +6,7 @@ motion/ding alerts via Firebase Cloud Messaging (no polling needed).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -54,8 +55,7 @@ async def authenticate() -> Ring:
     token_path = settings.ring.token_path
     if not token_path.is_file():
         raise FileNotFoundError(
-            f"No cached token at {token_path}. "
-            "Run `python -m ring_doorbell.cli --auth` to create one."
+            f"No cached token at {token_path}. Run `ring-auth` to authenticate."
         )
 
     token_data = json.loads(token_path.read_text())
@@ -160,6 +160,75 @@ async def download_latest_video(ring: Ring, camera_name: str | None = None) -> P
     except Exception:
         log.exception("Failed to download video %s", vid_id)
         return None
+
+
+async def download_video_with_retry(
+    ring: Ring,
+    camera_name: str | None = None,
+    timeout: int = 60,
+    retry_delay: int = 5,
+    shutdown_event: asyncio.Event | None = None,
+) -> Path | None:
+    """Wait for video to become available on Ring servers, then download it.
+
+    Ring processes videos server-side after motion events. This retries
+    up to `timeout` seconds with `retry_delay` between attempts.
+    Respects an optional shutdown_event for clean exit.
+    """
+    cam = get_camera(ring, camera_name)
+    deadline = asyncio.get_event_loop().time() + timeout
+
+    while asyncio.get_event_loop().time() < deadline:
+        if shutdown_event and shutdown_event.is_set():
+            return None
+
+        try:
+            history = await cam.async_history(limit=1)
+            if not history:
+                log.debug("No video history yet for %s, retrying...", cam.name)
+            else:
+                event = history[0]
+                vid_id = event["id"]
+                created_at = event["created_at"]
+                age = (datetime.now() - created_at).total_seconds()
+
+                # Only download videos from the last 5 minutes
+                if age > 300:
+                    log.debug("Most recent video is %ds old, waiting for new one...", int(age))
+                else:
+                    timestamp_str = created_at.strftime("%Y-%m-%d_%H-%M-%S")
+                    filename = f"{cam.name}_{vid_id}_{timestamp_str}.mp4"
+
+                    output_dir = settings.storage.video_dir()
+                    date_dir = output_dir / created_at.strftime("%Y-%m-%d")
+                    date_dir.mkdir(parents=True, exist_ok=True)
+                    output_path = date_dir / filename
+
+                    if output_path.exists():
+                        log.info("Video already downloaded: %s", output_path)
+                        return output_path
+
+                    try:
+                        await cam.async_recording_download(vid_id, str(output_path))
+                        log.info("Downloaded video: %s", output_path)
+                        return output_path
+                    except Exception:
+                        log.debug("Video not ready yet, retrying...", exc_info=True)
+        except Exception:
+            log.debug("Error checking video history, retrying...", exc_info=True)
+
+        # Wait retry_delay or until shutdown
+        if shutdown_event:
+            try:
+                await asyncio.wait_for(asyncio.shield(shutdown_event.wait()), timeout=retry_delay)
+                return None  # Shutdown requested
+            except TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(retry_delay)
+
+    log.warning("Timed out waiting for video from %s after %ds", cam.name, timeout)
+    return None
 
 
 async def download_snapshot(ring: Ring, camera_name: str | None = None) -> Path | None:

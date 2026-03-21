@@ -56,6 +56,8 @@ ring-visits = "ring_detector.cli:visits_main"
 ring-refs = "ring_detector.cli:refs_main"
 ring-status = "ring_detector.cli:status_main"
 ring-face = "ring_detector.cli:face_main"
+ring-auth = "ring_detector.cli:auth_main"
+ring-test = "ring_detector.cli:test_main"
 
 [tool.ruff]
 line-length = 100

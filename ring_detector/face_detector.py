@@ -74,7 +74,6 @@ class LocalFaceDetector(FaceDetector):
     ) -> list[FaceResult]:
         try:
             from ring_detector.face_utils import (
-                _STRIDE_MAP,
                 INPUT_SIZE,
                 SCRFD_INPUT_NAME,
                 align_faces_batch,
@@ -85,7 +84,7 @@ class LocalFaceDetector(FaceDetector):
 
             blob, det_scale = preprocess_scrfd(image_bgr, INPUT_SIZE)
             raw_outs = self._detector.run(None, {SCRFD_INPUT_NAME: blob})
-            output_names = [name for stride in [8, 16, 32] for name in _STRIDE_MAP[stride]]
+            output_names = [o.name for o in self._detector.get_outputs()]
             net_outs = dict(zip(output_names, raw_outs, strict=True))
 
             boxes, scores, landmarks = decode_scrfd_outputs(

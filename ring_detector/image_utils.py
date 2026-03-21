@@ -107,6 +107,57 @@ def pad_to_square(image: np.ndarray, size: int = 640) -> np.ndarray:
     return canvas
 
 
+def extract_key_frames(
+    video_path: str | Path,
+    frame_interval: int = 30,
+    max_frames: int = 15,
+) -> list[tuple[int, np.ndarray]]:
+    """Extract evenly-spaced BGR frames from a video file.
+
+    Auto-adjusts interval upward if the video would exceed max_frames.
+    Returns list of (frame_number, bgr_image) tuples, or empty list on failure.
+    """
+    video_path = Path(video_path)
+    if not video_path.is_file():
+        log.warning("Video not found: %s", video_path)
+        return []
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        log.warning("Failed to open video: %s", video_path)
+        return []
+
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+    # Auto-adjust interval to stay within max_frames budget
+    if total // frame_interval > max_frames:
+        frame_interval = max(1, total // max_frames)
+
+    log.info(
+        "Extracting frames from %s (%d total, %.1f fps, interval=%d, max=%d)",
+        video_path.name,
+        total,
+        fps,
+        frame_interval,
+        max_frames,
+    )
+
+    frames: list[tuple[int, np.ndarray]] = []
+    frame_num = 0
+    while cap.isOpened() and len(frames) < max_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_num % frame_interval == 0:
+            frames.append((frame_num, frame))
+        frame_num += 1
+
+    cap.release()
+    log.info("Extracted %d frames from %s", len(frames), video_path.name)
+    return frames
+
+
 def prepare_batch(
     image_paths: list[str], resize_height: int = 640, max_workers: int = 20
 ) -> tuple[list[str], list[np.ndarray], list[np.ndarray]]:

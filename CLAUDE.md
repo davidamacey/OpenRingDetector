@@ -20,12 +20,14 @@ docker compose up -d                    # Start PostgreSQL (schema applied autom
 ## Commands
 
 ```bash
+ring-auth        # Authenticate with Ring (email + password + 2FA)
 ring-watch       # Main event loop (push → detect → match → track → notify)
 ring-embed DIR   # Batch process images
 ring-ref DIR --name cleaners_car --display-name "Cleaner"
 ring-visits      # View visit history (--active, --name, --limit)
 ring-refs        # List configured vehicle references
 ring-status      # Health check: DB, GPU, model, Ring token, Ollama, archive
+ring-test FILE   # Test detection pipeline on local images/videos
 
 ring-face add david photo.jpg --display-name "David"   # Add face profile
 ring-face list                                          # List face profiles

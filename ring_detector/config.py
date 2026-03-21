@@ -95,6 +95,23 @@ class FaceDetectionConfig:
 
 
 @dataclass
+class VideoAnalysisConfig:
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("VIDEO_ANALYSIS_ENABLED", "true").lower() == "true"
+    )
+    # Extract every Nth frame (~1fps at 30fps video)
+    frame_interval: int = field(
+        default_factory=lambda: int(os.getenv("VIDEO_FRAME_INTERVAL", "30"))
+    )
+    # Maximum frames to analyze per video
+    max_frames: int = field(default_factory=lambda: int(os.getenv("VIDEO_MAX_FRAMES", "15")))
+    # Seconds to wait for Ring to process the video
+    wait_timeout: int = field(default_factory=lambda: int(os.getenv("VIDEO_WAIT_TIMEOUT", "60")))
+    # Seconds between retry attempts
+    retry_delay: int = field(default_factory=lambda: int(os.getenv("VIDEO_RETRY_DELAY", "5")))
+
+
+@dataclass
 class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     ring: RingConfig = field(default_factory=RingConfig)
@@ -103,6 +120,7 @@ class Settings:
     model: ModelConfig = field(default_factory=ModelConfig)
     captioner: CaptionerConfig = field(default_factory=CaptionerConfig)
     face: FaceDetectionConfig = field(default_factory=FaceDetectionConfig)
+    video: VideoAnalysisConfig = field(default_factory=VideoAnalysisConfig)
 
 
 settings = Settings()
