@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import (
     analytics,
+    chat,
     events,
     faces,
     images,
@@ -101,6 +102,7 @@ app.include_router(settings_router.router, prefix="/api")
 app.include_router(images.router, prefix="/api")
 app.include_router(test.router, prefix="/api")
 app.include_router(watcher.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 
 
 @app.get("/api/health")

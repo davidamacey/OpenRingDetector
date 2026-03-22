@@ -119,3 +119,57 @@ export interface AnalyticsTimeline {
   timestamp: string;
   count: number;
 }
+
+// Chat types
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  images?: ChatImage[];
+  eventDetails?: ChatEventDetail[];
+  referenceCards?: ChatReferenceCard[];
+  faceCards?: ChatFaceCard[];
+  isStreaming?: boolean;
+  error?: string;
+}
+
+export interface ChatImage {
+  url: string;
+  alt: string;
+  eventId?: number;
+}
+
+export interface ChatEventDetail {
+  id: number;
+  event_type: string;
+  camera_name: string;
+  occurred_at: string;
+  detection_summary: string | null;
+  display_name: string | null;
+}
+
+export interface ChatReferenceCard {
+  name: string;
+  display_name: string;
+  category: string;
+  image_url: string | null;
+  visit_count: number;
+  last_seen: string | null;
+}
+
+export interface ChatFaceCard {
+  name: string;
+  display_name: string;
+  image_url: string | null;
+  visit_count: number;
+  last_seen: string | null;
+}
+
+export interface ChatStatusResponse {
+  available: boolean;
+  model_loaded: boolean;
+  model_name: string;
+  ollama_reachable: boolean;
+  detail: string;
+}

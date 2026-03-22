@@ -176,3 +176,17 @@ class SettingsUpdateRequest(BaseModel):
     storage: dict | None = None
     face: dict | None = None
     video: dict | None = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list = []
+    conversation_id: str | None = None
+
+
+class ChatStatusResponse(BaseModel):
+    available: bool
+    model_loaded: bool
+    model_name: str
+    ollama_reachable: bool
+    detail: str

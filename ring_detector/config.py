@@ -76,6 +76,7 @@ class CaptionerConfig:
     ollama_url: str = os.getenv("OLLAMA_URL", "http://localhost:9551")
     model: str = os.getenv("CAPTIONER_MODEL", "gemma3:4b")
     timeout: int = int(os.getenv("CAPTIONER_TIMEOUT", "60"))
+    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "90"))
 
 
 @dataclass

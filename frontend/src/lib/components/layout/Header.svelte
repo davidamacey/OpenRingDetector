@@ -1,6 +1,8 @@
 <script lang="ts">
   import { statusStore } from '$lib/stores/status';
+  import { chatStore } from '$lib/stores/chat';
   import WatcherPanel from '$lib/components/watcher/WatcherPanel.svelte';
+  import { MessageCircle } from 'lucide-svelte';
 
   interface Props {
     title: string;
@@ -28,5 +30,14 @@
         GPU: {status.gpu.detail.split(',')[0]?.trim()}
       </span>
     {/if}
+    <span class="hidden md:block" style="color: var(--color-text-muted);">|</span>
+    <button
+      onclick={() => chatStore.togglePanel()}
+      class="p-1.5 rounded-lg transition-colors"
+      style="color: var(--color-text-muted);"
+      title="Toggle chat (Ctrl+K)"
+    >
+      <MessageCircle size={18} />
+    </button>
   </div>
 </header>
