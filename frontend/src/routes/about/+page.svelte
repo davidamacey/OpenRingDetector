@@ -11,15 +11,7 @@
   <div class="max-w-2xl mx-auto space-y-6">
     <!-- Hero -->
     <div class="text-center py-8">
-      <div
-        class="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-4"
-        style="background: var(--color-accent);"
-      >
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
-          <circle cx="12" cy="13" r="3"/>
-        </svg>
-      </div>
+      <img src="/logo.svg" alt="OpenRingDetector" class="w-20 h-20 rounded-2xl mx-auto mb-4" />
       <h2 class="text-2xl font-bold mb-2" style="color: var(--color-text-primary);">OpenRingDetector</h2>
       <p class="text-sm" style="color: var(--color-text-secondary);">
         Self-hosted AI replacement for Ring's paid detection features
