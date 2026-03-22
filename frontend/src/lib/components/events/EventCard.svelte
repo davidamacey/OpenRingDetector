@@ -68,11 +68,11 @@
         {event.camera_name}
       </span>
       <span
-        class="text-xs font-mono ml-auto flex-shrink-0"
+        class="text-xs font-mono ml-auto flex-shrink-0 text-right"
         style="color: var(--color-text-muted);"
-        title={new Date(event.occurred_at).toLocaleString()}
+        title={relativeTime}
       >
-        {relativeTime}
+        {absTime}<br /><span class="text-xs" style="color: var(--color-text-muted); opacity: 0.7;">{relativeTime}</span>
       </span>
     </div>
 

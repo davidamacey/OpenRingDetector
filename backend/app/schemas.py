@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PlainSerializer
+
+# Naive datetimes stored in DB are UTC — append Z so browsers parse them correctly.
+UTCDatetime = Annotated[
+    datetime,
+    PlainSerializer(lambda v: v.isoformat() + "Z" if v is not None else None, return_type=str),
+]
 
 
 class DetectionResponse(BaseModel):
@@ -25,7 +32,7 @@ class EventResponse(BaseModel):
     id: int
     event_type: str
     camera_name: str
-    occurred_at: datetime
+    occurred_at: UTCDatetime
     snapshot_url: str | None
     detection_summary: str | None
     reference_name: str | None
@@ -47,9 +54,9 @@ class VisitResponse(BaseModel):
     reference_name: str
     display_name: str
     camera_name: str
-    arrived_at: datetime
-    last_motion_at: datetime
-    departed_at: datetime | None
+    arrived_at: UTCDatetime
+    last_motion_at: UTCDatetime
+    departed_at: UTCDatetime | None
     duration_minutes: int | None
     snapshot_url: str | None
     is_active: bool
@@ -68,7 +75,7 @@ class ReferenceResponse(BaseModel):
     display_name: str
     category: str
     visit_count: int
-    last_seen: datetime | None
+    last_seen: UTCDatetime | None
     sample_image_url: str | None
 
 
@@ -78,9 +85,9 @@ class FaceProfileResponse(BaseModel):
     uuid: str
     name: str
     display_name: str
-    created_at: datetime
+    created_at: UTCDatetime
     visit_count: int
-    last_seen: datetime | None
+    last_seen: UTCDatetime | None
     sample_image_url: str | None
 
 
@@ -112,8 +119,8 @@ class SettingsResponse(BaseModel):
 class UnmatchedVehicle(BaseModel):
     cluster_id: str
     sighting_count: int
-    first_seen: datetime
-    last_seen: datetime
+    first_seen: UTCDatetime
+    last_seen: UTCDatetime
     camera_name: str
     representative_crop_url: str | None
     all_crop_urls: list[str]
@@ -122,7 +129,7 @@ class UnmatchedVehicle(BaseModel):
 class UnmatchedFace(BaseModel):
     face_embedding_uuid: str
     sighting_count: int
-    last_seen: datetime
+    last_seen: UTCDatetime
     camera_name: str
     crop_url: str | None
 
@@ -140,7 +147,7 @@ class AnalyticsHeatmap(BaseModel):
 class AnalyticsTopVisitor(BaseModel):
     display_name: str
     visit_count: int
-    last_seen: datetime
+    last_seen: UTCDatetime
 
 
 class AnalyticsDetectionType(BaseModel):

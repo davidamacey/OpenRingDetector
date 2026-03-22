@@ -1,8 +1,8 @@
 """Compare Gemma 3 4B vs Moondream 1.8B for CCTV captioning on CPU."""
+
 from __future__ import annotations
 
 import base64
-import json
 import time
 from pathlib import Path
 

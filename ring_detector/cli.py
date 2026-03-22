@@ -514,7 +514,7 @@ def test_main():
     session = get_session()
     models = load_models()
 
-    output_dir = Path("test_output")
+    output_dir = Path("/tmp/test_output")
     if args.save_crops:
         output_dir.mkdir(exist_ok=True)
 
@@ -703,15 +703,16 @@ def _test_notify(
     cv2.imwrite(str(best_path), best_frame)
     snap_str = str(best_path)
     # Also save to test_output for local inspection
-    Path("test_output").mkdir(exist_ok=True)
-    cv2.imwrite(f"test_output/best_frame_{cam_name.replace(' ', '_')}.jpg", best_frame)
+    test_out = Path("/tmp/test_output")
+    test_out.mkdir(exist_ok=True)
+    cv2.imwrite(str(test_out / f"best_frame_{cam_name.replace(' ', '_')}.jpg"), best_frame)
 
     # Multi-frame caption
     if settings.captioner.enabled:
         tmp_paths = []
         step = max(1, len(frame_images) // 5)
         for idx in range(0, len(frame_images), step):
-            p = Path("test_output") / f"_caption_{idx}.jpg"
+            p = test_out / f"_caption_{idx}.jpg"
             cv2.imwrite(str(p), frame_images[idx])
             tmp_paths.append(str(p))
         cap = caption_frames(tmp_paths, max_frames=5)

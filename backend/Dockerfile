@@ -12,12 +12,15 @@ RUN adduser --disabled-password --uid 1000 appuser && \
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install ring_detector package from repo root
+# Install ring_detector deps using a stub so code changes don't bust this layer
 COPY pyproject.toml /app/pyproject.toml
+RUN mkdir -p ring_detector && touch ring_detector/__init__.py && \
+    pip install --no-cache-dir -e .
+
+# Copy actual source after deps are cached
 COPY ring_detector /app/ring_detector
 COPY alembic.ini /app/alembic.ini
 COPY alembic /app/alembic
-RUN pip install --no-cache-dir -e .
 
 # Copy backend app
 COPY backend/app /app/app

@@ -26,9 +26,12 @@ RUN pip install --no-cache-dir \
         torchvision==0.17.2+cu121 \
         --index-url https://download.pytorch.org/whl/cu121
 
-# Install the rest of the project dependencies
+# Install remaining deps with stub so code changes don't bust this layer
+RUN mkdir -p ring_detector && touch ring_detector/__init__.py && \
+    pip install --no-cache-dir -e .
+
+# Copy actual source after deps are cached
 COPY ring_detector/ ./ring_detector/
-RUN pip install --no-cache-dir -e .
 
 # Create runtime directories
 RUN mkdir -p /app/tokens /app/models /app/logs \
