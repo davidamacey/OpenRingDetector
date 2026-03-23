@@ -31,8 +31,12 @@ class RingConfig:
         os.getenv("RING_FCM_CREDENTIALS_PATH", "./tokens/fcm_credentials.json")
     )
     camera_name: str = os.getenv("RING_CAMERA_NAME", "")
-    # Seconds without new motion to consider someone "departed"
-    departure_timeout: int = int(os.getenv("DEPARTURE_TIMEOUT", "300"))
+    # Timer-fallback: silence before departure recorded (primary detection is FOV-presence-driven)
+    departure_timeout: int = int(os.getenv("DEPARTURE_TIMEOUT", "7200"))
+    # Consecutive motion events without vehicle in FOV before departure is declared
+    departure_miss_threshold: int = int(os.getenv("DEPARTURE_MISS_THRESHOLD", "2"))
+    # Delay before "Unknown Visitor" push (window for vehicle detection to cancel it)
+    unknown_visitor_delay: int = int(os.getenv("UNKNOWN_VISITOR_DELAY", "120"))
     # Seconds to ignore duplicate motion events from same camera
     cooldown_seconds: int = int(os.getenv("MOTION_COOLDOWN", "30"))
 

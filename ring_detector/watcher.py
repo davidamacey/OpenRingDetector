@@ -118,6 +118,8 @@ class RingWatcher:
         self._last_processed: dict[str, datetime] = {}
         self._seen_event_ids: set[int] = set()
         self._max_seen_ids = 500
+        self._pending_unknown_tasks: dict[str, asyncio.Task] = {}  # cam_name → task
+        self._visit_miss_counts: dict[int, int] = {}  # visit_id → consecutive miss count
 
     async def startup(self) -> None:
         log.info("Starting Ring Watcher...")
@@ -201,6 +203,32 @@ class RingWatcher:
             return ""
         counts = df_dets["class_name"].value_counts()
         return ", ".join(f"{cls} x{n}" if n > 1 else cls for cls, n in counts.items())
+
+    # --- Unknown Visitor Deferred Notification ---
+
+    def _cancel_unknown_task(self, cam_name: str) -> None:
+        task = self._pending_unknown_tasks.pop(cam_name, None)
+        if task and not task.done():
+            task.cancel()
+
+    async def _delayed_unknown_notify(
+        self, cam_name: str, summary: str, snap_str: str | None
+    ) -> None:
+        if await self._wait_or_shutdown(settings.ring.unknown_visitor_delay):
+            return
+        self._pending_unknown_tasks.pop(cam_name, None)
+        # Suppress if a known visit started for this camera during the delay window
+        if any(v.camera_name == cam_name for v in get_active_visits(self.session)):
+            log.info(
+                "Unknown visitor notification suppressed - known visitor identified at %s", cam_name
+            )
+            return
+        notify_unknown_visitor(cam_name, summary, snap_str)
+
+    def _schedule_unknown_visitor(self, cam_name: str, summary: str, snap_str: str | None) -> None:
+        self._cancel_unknown_task(cam_name)
+        task = asyncio.create_task(self._delayed_unknown_notify(cam_name, summary, snap_str))
+        self._pending_unknown_tasks[cam_name] = task
 
     # --- Event Processing ---
 
@@ -384,16 +412,85 @@ class RingWatcher:
         now = datetime.now()
         ts = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Extend active visits instead of re-detecting
+        # Check whether the known vehicle is still in the camera FOV
         active = get_active_visits(self.session)
         if active:
-            for v in active:
-                extend_visit(self.session, v)
-            log.info(
-                "Motion extends %d visit(s): %s",
-                len(active),
-                ", ".join(v.display_name for v in active),
-            )
+            if self._is_on_cooldown(cam_name):
+                for v in active:
+                    extend_visit(self.session, v)
+                return
+            self._last_processed[cam_name] = now
+
+            # Quick snapshot + full YOLO — checks vehicle presence and captures event context
+            snap = await ring_api.download_snapshot(self.ring, cam_name)
+            snap_str = str(snap) if snap else None
+            vehicle_present = False
+            summary = ""
+
+            if snap_str:
+                paths, resized, _padded = prepare_batch([snap_str])
+                if paths:
+                    _meta, df_dets, _crops = run_detection(self.models, resized, paths)
+                    if len(df_dets) > 0:
+                        vehicle_present = bool(df_dets["class_id"].isin({2, 7}).any())
+                        summary = self._detection_summary(df_dets)
+                    clear_gpu_memory()
+
+            if vehicle_present:
+                for v in active:
+                    extend_visit(self.session, v)
+                    self._visit_miss_counts[v.id] = 0
+                    record_event(
+                        self.session,
+                        event_type="motion",
+                        camera_name=cam_name,
+                        snapshot_path=snap_str,
+                        detection_summary=summary,
+                        reference_name=v.reference_name,
+                        display_name=v.display_name,
+                        visit_event_id=v.id,
+                    )
+                log.info(
+                    "Motion: vehicle present (%s), %d visit(s) extended",
+                    summary,
+                    len(active),
+                )
+            else:
+                for v in active:
+                    miss = self._visit_miss_counts.get(v.id, 0) + 1
+                    self._visit_miss_counts[v.id] = miss
+                    log.info(
+                        "Motion: %s not in FOV (miss %d/%d) — detected: %s",
+                        v.display_name,
+                        miss,
+                        settings.ring.departure_miss_threshold,
+                        summary or "nothing",
+                    )
+                    if miss >= settings.ring.departure_miss_threshold:
+                        self._visit_miss_counts.pop(v.id, None)
+                        dur = record_departure(self.session, v)
+                        record_event(
+                            self.session,
+                            event_type="departure",
+                            camera_name=cam_name,
+                            snapshot_path=snap_str,
+                            detection_summary=summary,
+                            reference_name=v.reference_name,
+                            display_name=v.display_name,
+                            visit_event_id=v.id,
+                        )
+                        notify_departure(v.display_name, cam_name, dur)
+                    else:
+                        record_event(
+                            self.session,
+                            event_type="motion",
+                            camera_name=cam_name,
+                            snapshot_path=snap_str,
+                            detection_summary=summary,
+                            reference_name=v.reference_name,
+                            display_name=v.display_name,
+                            visit_event_id=v.id,
+                        )
             return
 
         if self._is_on_cooldown(cam_name):
@@ -533,6 +630,7 @@ class RingWatcher:
 
         # --- Vehicle arrivals ---
         for m in analysis.matched_refs:
+            self._cancel_unknown_task(cam_name)
             existing = get_active_visit_by_reference(self.session, m["reference_name"])
             if existing:
                 extend_visit(self.session, existing)
@@ -575,6 +673,7 @@ class RingWatcher:
                 if fm["profile_name"] in seen_faces:
                     continue
                 seen_faces.add(fm["profile_name"])
+                self._cancel_unknown_task(cam_name)
                 face_ref = f"face:{fm['profile_name']}"
                 existing = get_active_visit_by_reference(self.session, face_ref)
                 if existing:
@@ -606,7 +705,7 @@ class RingWatcher:
                 caption=caption,
             )
             if analysis.has_persons or analysis.unmatched_face_embeddings:
-                notify_unknown_visitor(cam_name, summary or ts, snap_str)
+                self._schedule_unknown_visitor(cam_name, summary or ts, snap_str)
             else:
                 notify_motion(cam_name, f"{ts} — {summary}" if summary else ts, snap_str)
 
